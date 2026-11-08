@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>منصة مستر عمرو السيد في الكيمياء</title>
+  <meta name="description" content="المنصة الرسمية والوحيدة لمستر عمرو السيد في مادة الكيمياء للمرحلة الثانوية - محاضرات تفاعلية، امتحانات ذكية، بنك أسئلة، ومتابعة شاملة لكافة طلاب الجمهورية." />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚗️</text></svg>" />
+
+  <!-- Google Fonts: Alexandria & Cairo & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Alexandria:wght@300;400;500;600;700;800;900&family=Cairo:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <!-- PDF.js Engine for Canvas-based In-Platform Document Rendering (Samsung Notes Experience) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
+
+  <style>
+    :root {
+      font-family: 'Alexandria', 'Cairo', sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-[#050811] text-slate-100 selection:bg-cyan-500 selection:text-white" oncontextmenu="return false;">
+
+  <!-- Global Anti-Piracy Protection Keyboard Shortcuts -->
+  <script>
+    document.addEventListener('keydown', function(e) {
+      if (
+        (e.ctrlKey && (e.key === 's' || e.key === 'u' || e.key === 'p' || e.key === 'c')) ||
+        e.key === 'F12' ||
+        (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C'))
+      ) {
+        e.preventDefault();
+        return false;
+      }
+    });
+  </script>
+
+  <!-- React Application Root Container -->
+  <div id="root"></div>
+
+  <!-- Vite React Entry Point -->
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
