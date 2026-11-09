@@ -8,7 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+const PORT = 3000;
 
 // Body parser with 1024mb (1 Gigabyte) limit for 4K UHD videos and huge documents
 app.use(express.json({ limit: '1024mb' }));
@@ -146,14 +146,16 @@ app.post('/api/upload-file', (req, res) => {
 });
 
 // Initialize Google GenAI client (Server-Side only)
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+const ai = process.env.GEMINI_API_KEY
+  ? new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    })
+  : null;
 
 // Helper to extract or parse educational questions tailored to any subject (Chemistry, Biology, Science, Primary to Secondary)
 function extractSmartQuestions(grade: string = 'sec3', instructions: string = '', rawText: string = ''): any {
@@ -380,21 +382,23 @@ app.post('/api/ai-chat', async (req, res) => {
     const models = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
     let replyText = '';
 
-    for (const model of models) {
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: parts,
-          config: {
-            systemInstruction: systemPrompt,
-          },
-        });
-        if (response && response.text) {
-          replyText = response.text.trim();
-          break;
+    if (ai) {
+      for (const model of models) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: parts,
+            config: {
+              systemInstruction: systemPrompt,
+            },
+          });
+          if (response && response.text) {
+            replyText = response.text.trim();
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`[AI-Chat] Model ${model} failed:`, err.message?.slice(0, 100));
         }
-      } catch (err: any) {
-        console.warn(`[AI-Chat] Model ${model} failed:`, err.message?.slice(0, 100));
       }
     }
 
@@ -480,7 +484,8 @@ app.post('/api/ai-parse-quiz', async (req, res) => {
       parts.push({ text: userPrompt });
     }
 
-    for (const modelName of candidateModels) {
+    if (ai) {
+      for (const modelName of candidateModels) {
       try {
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('AI_TIMEOUT')), 60000)
@@ -558,6 +563,7 @@ app.post('/api/ai-parse-quiz', async (req, res) => {
         console.warn(`Model ${modelName} encountered error:`, geminiErr.message?.slice(0, 100));
       }
     }
+  }
 
     const questionImageAttachment = cleanBase64
       ? `data:${cleanMimeType};base64,${cleanBase64}`
@@ -656,7 +662,7 @@ app.post('/api/ai-extract-students', async (req, res) => {
 }`;
 
     let extractedStudents: any[] = [];
-    if (cleanBase64) {
+    if (cleanBase64 && ai) {
       const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest'];
       for (const model of candidateModels) {
         try {

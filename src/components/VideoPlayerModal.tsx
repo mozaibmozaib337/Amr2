@@ -149,22 +149,22 @@ export const VideoPlayerModal: React.FC = () => {
 
   if (!activeVideo) return null;
 
-  // Robust Embed URL Parser
+  // Robust Embed URL Parser (Custom White-Label Isolated Wrapper)
   const getEmbedInfo = (url: string): { isEmbed: boolean; embedUrl: string; type: 'youtube' | 'drive' | 'vimeo' | 'none' } => {
     if (!url) return { isEmbed: false, embedUrl: '', type: 'none' };
 
-    // YouTube
+    // YouTube: using youtube-nocookie.com with modestbranding=1&rel=0&showinfo=0&iv_load_policy=3
     const ytMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/i);
     if (ytMatch && ytMatch[1]) {
       return {
         isEmbed: true,
-        embedUrl: `https://www.youtube-nocookie.com/embed/${ytMatch[1]}?autoplay=1&rel=0&modestbranding=1&playsinline=1`,
+        embedUrl: `https://www.youtube-nocookie.com/embed/${ytMatch[1]}?autoplay=1&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&controls=1&disablekb=0&fs=1`,
         type: 'youtube',
       };
     }
 
-    // Google Drive
-    const driveMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+    // Google Drive: auto-converted to /preview mode
+    const driveMatch = url.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([a-zA-Z0-9_-]+)/i);
     if (driveMatch && driveMatch[1]) {
       return {
         isEmbed: true,
@@ -173,9 +173,10 @@ export const VideoPlayerModal: React.FC = () => {
       };
     }
     if (url.includes('drive.google.com')) {
+      const cleanDrive = url.replace(/\/view(\?.*)?$/, '/preview');
       return {
         isEmbed: true,
-        embedUrl: url.replace(/\/view(\?.*)?$/, '/preview'),
+        embedUrl: cleanDrive.includes('/preview') ? cleanDrive : `${cleanDrive}/preview`,
         type: 'drive',
       };
     }
@@ -185,11 +186,12 @@ export const VideoPlayerModal: React.FC = () => {
     if (vimeoMatch && vimeoMatch[1]) {
       return {
         isEmbed: true,
-        embedUrl: `https://player.vimeo.com/video/${vimeoMatch[1]}?autoplay=1`,
+        embedUrl: `https://player.vimeo.com/video/${vimeoMatch[1]}?autoplay=1&title=0&byline=0&portrait=0`,
         type: 'vimeo',
       };
     }
 
+    // Telegram and direct MP4/WebM links: rendered via custom HTML5 player with platform controls
     return { isEmbed: false, embedUrl: url, type: 'none' };
   };
 
@@ -422,13 +424,52 @@ export const VideoPlayerModal: React.FC = () => {
               <p className="text-xs text-slate-400">يدعم السحب والإفلات والتشغيل المتواصل</p>
             </div>
           ) : embedInfo.isEmbed ? (
-            <iframe
-              src={embedInfo.embedUrl}
-              title={activeVideo.title}
-              className="w-full h-full border-0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-            />
+            <div className="relative w-full h-full overflow-hidden select-none">
+              {/* Google Drive Pop-out icon blocker mask (blocks top-right pop-out button) */}
+              {embedInfo.type === 'drive' && (
+                <>
+                  <div
+                    className="absolute top-0 right-0 w-28 h-20 z-30 bg-transparent cursor-default pointer-events-auto"
+                    title=""
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                  />
+                  <div
+                    className="absolute top-0 left-0 w-24 h-20 z-30 bg-transparent cursor-default pointer-events-auto"
+                    title=""
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                  />
+                </>
+              )}
+
+              {/* YouTube Title & External Link Blocker Mask */}
+              {embedInfo.type === 'youtube' && (
+                <div
+                  className="absolute top-0 left-0 right-0 h-16 z-20 bg-transparent cursor-default pointer-events-auto"
+                  title=""
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+              )}
+
+              <iframe
+                src={embedInfo.embedUrl}
+                title={activeVideo.title}
+                className="w-full h-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
           ) : (
             <>
               <video

@@ -9,8 +9,8 @@ export interface SupabaseConfig {
   bucketName: string;
 }
 
-export const DEFAULT_SUPABASE_URL = 'https://pcpyhjdnclzuqlhrlqui.supabase.co';
-export const DEFAULT_SUPABASE_KEY = 'sb_publishable_AdHng3q0ogCOLTx9hwPIZg_yU5kr9nG';
+export const DEFAULT_SUPABASE_URL = 'https://drnpfyolgmkcarpsjvmn.supabase.co';
+export const DEFAULT_SUPABASE_KEY = 'sb_publishable_WkxrLhhy5TWPZ7lP8B-bxQ_GO7BrKLR';
 
 // Check local storage or environment variables or defaults
 export function getStoredSupabaseConfig(): SupabaseConfig {

@@ -1,35 +1,108 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Supabase Credentials reading from environment variables with direct fallbacks
-export const SUPABASE_URL =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
-  'https://pcpyhjdnclzuqlhrlqui.supabase.co';
+// Dynamic Supabase Credentials manager:
+// Priority: 1) localStorage ('amr_chem_supabase_config') 2) import.meta.env 3) Default Project
+export const DEFAULT_SUPABASE_URL = 'https://drnpfyolgmkcarpsjvmn.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_WkxrLhhy5TWPZ7lP8B-bxQ_GO7BrKLR';
 
-export const SUPABASE_ANON_KEY =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
-  'sb_publishable_AdHng3q0ogCOLTx9hwPIZg_yU5kr9nG';
 
-// Clean standard base URL (stripping /rest/v1 if included)
-const normalizedUrl = SUPABASE_URL.replace(/\/rest\/v1\/?$/, '');
+export function getActiveSupabaseCredentials(): { url: string; key: string } {
+  try {
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('amr_chem_supabase_config') : null;
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.supabaseUrl && parsed.supabaseAnonKey) {
+        return {
+          url: parsed.supabaseUrl.trim().replace(/\/rest\/v1\/?$/, ''),
+          key: parsed.supabaseAnonKey.trim(),
+        };
+      }
+    }
+  } catch {
+    // Ignore parse error
+  }
+
+  const envUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
+  const envKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
+
+  return {
+    url: String(envUrl).trim().replace(/\/rest\/v1\/?$/, ''),
+    key: String(envKey).trim(),
+  };
+}
 
 let supabaseInstance: SupabaseClient | null = null;
+let lastInitUrl = '';
+let lastInitKey = '';
 
 export function getSupabase(): SupabaseClient {
-  if (!supabaseInstance) {
+  const { url, key } = getActiveSupabaseCredentials();
+
+  // If credentials changed or not yet initialized, instantiate fresh client
+  if (!supabaseInstance || lastInitUrl !== url || lastInitKey !== key) {
     try {
-      supabaseInstance = createClient(normalizedUrl, SUPABASE_ANON_KEY, {
+      supabaseInstance = createClient(url, key, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
         },
       });
-      console.log('✅ Connected to Supabase directly:', normalizedUrl);
+      lastInitUrl = url;
+      lastInitKey = key;
+      console.log('✅ Connected to Supabase directly:', url);
     } catch (err) {
       console.warn('⚠️ Supabase client initialization notice:', err);
     }
   }
   return supabaseInstance!;
 }
+
+/**
+ * Update Supabase credentials at runtime from the UI or code
+ */
+export function updateActiveSupabaseCredentials(newUrl: string, newKey: string, bucketName?: string): boolean {
+  if (!newUrl || !newKey) return false;
+  try {
+    const cleanUrl = newUrl.trim().replace(/\/rest\/v1\/?$/, '');
+    const cleanKey = newKey.trim();
+    localStorage.setItem(
+      'amr_chem_supabase_config',
+      JSON.stringify({
+        supabaseUrl: cleanUrl,
+        supabaseAnonKey: cleanKey,
+        bucketName: bucketName?.trim() || 'platform-files',
+      })
+    );
+    // Force re-create client
+    supabaseInstance = createClient(cleanUrl, cleanKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+      },
+    });
+    lastInitUrl = cleanUrl;
+    lastInitKey = cleanKey;
+    console.log('⚡ Successfully updated Supabase credentials to:', cleanUrl);
+    return true;
+  } catch (e) {
+    console.error('Failed to save Supabase credentials:', e);
+    return false;
+  }
+}
+
+/**
+ * Reset Supabase credentials back to default project
+ */
+export function resetActiveSupabaseCredentials(): void {
+  try {
+    localStorage.removeItem('amr_chem_supabase_config');
+    supabaseInstance = null;
+    getSupabase();
+  } catch {
+    // Ignore
+  }
+}
+
 
 /**
  * Sanitize data for Supabase / JSON storage:
@@ -75,8 +148,21 @@ function setLocalCache<T>(collectionName: string, items: T[]): void {
   }
 }
 
+const TABLE_MAPPINGS: Record<string, string[]> = {
+  lectures: ['courses', 'lectures'],
+  courses: ['lectures', 'courses'],
+  files: ['documents', 'files'],
+  documents: ['files', 'documents'],
+  registered_accounts: ['profiles', 'registered_accounts'],
+  profiles: ['registered_accounts', 'profiles'],
+  homeworks: ['assignments', 'homeworks'],
+  exams: ['assignments', 'exams'],
+  assignments: ['homeworks', 'exams', 'assignments'],
+};
+
 /**
  * Real-time listener using Supabase postgres_changes with instant local cache fallback
+ * Supports dual table aliases: profiles, courses, documents, assignments
  */
 export function subscribeToCollection<T>(
   collectionName: string,
@@ -94,56 +180,74 @@ export function subscribeToCollection<T>(
     setLocalCache(collectionName, initialSeed);
   }
 
-  // 2. Fetch fresh data from Supabase asynchronously
+  const candidateTables = TABLE_MAPPINGS[collectionName] || [collectionName];
+
+  // 2. Fetch fresh data from Supabase asynchronously (checks primary table and standard aliases)
   const fetchFromSupabase = async () => {
     try {
       const supabase = getSupabase();
       if (!supabase) return;
 
-      const { data, error } = await supabase.from(collectionName).select('*');
+      let foundData: any[] | null = null;
+
+      for (const tbl of candidateTables) {
+        try {
+          const { data, error } = await supabase.from(tbl).select('*');
+          if (!error && data && data.length > 0) {
+            foundData = data;
+            break;
+          }
+        } catch {
+          // continue checking other table
+        }
+      }
 
       if (!isMounted) return;
 
-      if (!error && data && data.length > 0) {
-        onUpdate(data as unknown as T[]);
-        setLocalCache(collectionName, data as unknown as T[]);
-      } else if ((!data || data.length === 0) && initialSeed && initialSeed.length > 0 && (!cached || cached.length === 0)) {
+      if (foundData && foundData.length > 0) {
+        onUpdate(foundData as unknown as T[]);
+        setLocalCache(collectionName, foundData as unknown as T[]);
+      } else if (initialSeed && initialSeed.length > 0 && (!cached || cached.length === 0)) {
         // Automatic initial seed to Supabase if table is new and empty
         try {
           const sanitizedSeed = initialSeed.map((item: any) => ({
             id: String(item.id || item.code || Math.random().toString(36).slice(2)),
             ...sanitizeForSupabase(item),
           }));
-          await supabase.from(collectionName).upsert(sanitizedSeed, { onConflict: 'id' });
+          for (const tbl of candidateTables) {
+            await supabase.from(tbl).upsert(sanitizedSeed, { onConflict: 'id' });
+          }
         } catch {
           // Table schema might be custom, continue smoothly
         }
       }
     } catch (err) {
-      // Supabase table might not exist yet - silent graceful fallback to local cache
       console.log(`[Supabase] Sync notice for ${collectionName}`);
     }
   };
 
   fetchFromSupabase();
 
-  // 3. Realtime Supabase Channel subscription
-  let channel: any = null;
+  // 3. Realtime Supabase Channel subscriptions for candidate tables
+  const channels: any[] = [];
   try {
     const supabase = getSupabase();
     if (supabase) {
-      channel = supabase
-        .channel(`public:${collectionName}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: collectionName },
-          () => {
-            if (isMounted) {
-              fetchFromSupabase();
+      candidateTables.forEach((tbl) => {
+        const chan = supabase
+          .channel(`public:${tbl}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: tbl },
+            () => {
+              if (isMounted) {
+                fetchFromSupabase();
+              }
             }
-          }
-        )
-        .subscribe();
+          )
+          .subscribe();
+        channels.push(chan);
+      });
     }
   } catch (channelErr) {
     console.warn(`[Supabase] Realtime channel setup notice for ${collectionName}:`, channelErr);
@@ -152,21 +256,18 @@ export function subscribeToCollection<T>(
   // Unsubscribe cleanup
   return () => {
     isMounted = false;
-    if (channel) {
+    channels.forEach((ch) => {
       try {
         const supabase = getSupabase();
-        if (supabase) {
-          supabase.removeChannel(channel);
-        }
-      } catch {
-        // Ignore cleanup notice
-      }
-    }
+        if (supabase) supabase.removeChannel(ch);
+      } catch {}
+    });
   };
 }
 
 /**
  * Save or overwrite a document by ID in Supabase
+ * Mirrors to both standard table (e.g. courses, documents, assignments, profiles) and legacy table
  */
 export async function saveDocument(collectionName: string, id: string, data: any): Promise<void> {
   const cleanId = String(id);
@@ -187,11 +288,22 @@ export async function saveDocument(collectionName: string, id: string, data: any
     setLocalCache(collectionName, updatedList);
   } catch {}
 
-  // 2. Persist to Supabase
+  // 2. Persist to Supabase across all candidate table aliases
+  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
   try {
     const supabase = getSupabase();
     if (supabase) {
-      await supabase.from(collectionName).upsert({ id: cleanId, ...cleanData }, { onConflict: 'id' });
+      const payload: any = { id: cleanId, ...cleanData };
+      if (collectionName === 'homeworks') payload.type = 'homework';
+      if (collectionName === 'exams') payload.type = 'exam';
+
+      for (const tbl of tables) {
+        try {
+          await supabase.from(tbl).upsert(payload, { onConflict: 'id' });
+        } catch (tblErr) {
+          // Table may not exist yet in user's schema
+        }
+      }
     }
   } catch (err) {
     console.warn(`[Supabase] saveDocument notice for ${collectionName}/${cleanId}:`, err);
@@ -216,11 +328,16 @@ export async function updateDocument(collectionName: string, id: string, partial
     }
   } catch {}
 
-  // 2. Persist to Supabase
+  // 2. Persist to Supabase across all candidate table aliases
+  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
   try {
     const supabase = getSupabase();
     if (supabase) {
-      await supabase.from(collectionName).update(cleanPartial).eq('id', cleanId);
+      for (const tbl of tables) {
+        try {
+          await supabase.from(tbl).update(cleanPartial).eq('id', cleanId);
+        } catch {}
+      }
     }
   } catch (err) {
     console.warn(`[Supabase] updateDocument notice for ${collectionName}/${cleanId}:`, err);
@@ -240,11 +357,16 @@ export async function deleteDocument(collectionName: string, id: string): Promis
     setLocalCache(collectionName, updatedList);
   } catch {}
 
-  // 2. Remove from Supabase
+  // 2. Remove from Supabase across all candidate table aliases
+  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
   try {
     const supabase = getSupabase();
     if (supabase) {
-      await supabase.from(collectionName).delete().eq('id', cleanId);
+      for (const tbl of tables) {
+        try {
+          await supabase.from(tbl).delete().eq('id', cleanId);
+        } catch {}
+      }
     }
   } catch (err) {
     console.warn(`[Supabase] deleteDocument notice for ${collectionName}/${cleanId}:`, err);
@@ -270,11 +392,16 @@ export async function bulkSaveDocuments(collectionName: string, items: any[]): P
     setLocalCache(collectionName, Array.from(existingMap.values()));
   } catch {}
 
-  // 2. Persist to Supabase
+  // 2. Persist to Supabase across all candidate table aliases
+  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
   try {
     const supabase = getSupabase();
     if (supabase) {
-      await supabase.from(collectionName).upsert(cleanItems, { onConflict: 'id' });
+      for (const tbl of tables) {
+        try {
+          await supabase.from(tbl).upsert(cleanItems, { onConflict: 'id' });
+        } catch {}
+      }
     }
   } catch (err) {
     console.warn(`[Supabase] bulkSaveDocuments notice for ${collectionName}:`, err);

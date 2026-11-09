@@ -205,8 +205,15 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
   }, [viewMode, viewEngine, scale, rotation, numPages, isLoading]);
 
   // Clean formatted URL for Google Drive preview or direct link
-  const safeEmbedUrl = fileUrl.includes('drive.google.com')
-    ? fileUrl.replace(/\/view(\?.*)?$/, '/preview')
+  const isGoogleDrive = fileUrl.includes('drive.google.com');
+  const safeEmbedUrl = isGoogleDrive
+    ? (() => {
+        const driveMatch = fileUrl.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([a-zA-Z0-9_-]+)/i);
+        if (driveMatch && driveMatch[1]) {
+          return `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
+        }
+        return fileUrl.replace(/\/view(\?.*)?$/, '/preview');
+      })()
     : fileUrl;
 
   return (
@@ -346,7 +353,30 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
 
         {/* Native Browser Embed (Foolproof, renders on 100% of browsers inside platform) */}
         {viewEngine === 'native' && (
-          <div className="w-full h-full rounded-xl overflow-hidden bg-white shadow-2xl">
+          <div className="w-full h-full rounded-xl overflow-hidden bg-white shadow-2xl relative select-none">
+            {/* Pop-out icon blocker mask for Google Drive */}
+            {isGoogleDrive && (
+              <>
+                <div
+                  className="absolute top-0 right-0 w-28 h-20 z-30 bg-transparent cursor-default pointer-events-auto"
+                  title=""
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+                <div
+                  className="absolute top-0 left-0 w-24 h-20 z-30 bg-transparent cursor-default pointer-events-auto"
+                  title=""
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+              </>
+            )}
             <iframe
               src={safeEmbedUrl}
               title={title || fileName || 'عرض مستند PDF'}

@@ -351,6 +351,7 @@ export const DocumentViewerModal: React.FC = () => {
   return (
     <div
       ref={modalContainerRef}
+      onContextMenu={(e) => e.preventDefault()}
       className={`fixed inset-0 z-50 flex items-center justify-center ${
         isFullscreen ? 'p-0 w-screen h-screen' : 'p-2 sm:p-4'
       } bg-black/95 backdrop-blur-md animate-fade-in select-none`}

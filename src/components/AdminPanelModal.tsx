@@ -62,6 +62,9 @@ import { uploadFileWithRealProgress, probeVideoDuration } from '../utils/realUpl
 import { GeminiTeacherDashboard } from './GeminiTeacherDashboard';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient } from '../utils/aiClientService';
+import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials } from '../services/supabaseService';
+import { Database } from 'lucide-react';
+
 
 export const AdminPanelModal: React.FC = () => {
   const {
@@ -160,6 +163,7 @@ export const AdminPanelModal: React.FC = () => {
     | 'exam_rankings'
     | 'secret_surveillance'
     | 'teacher_profile'
+    | 'supabase'
   >('videos');
 
   // Full Student Management State (Add, Edit, Delete, Filter)
@@ -373,6 +377,12 @@ export const AdminPanelModal: React.FC = () => {
 
   // High-contrast, crystal clear chat typography font size (adjustable by user)
   const [chatFontSize, setChatFontSize] = useState<number>(14);
+
+  // Supabase Configuration State
+  const initialSupabaseCreds = getActiveSupabaseCredentials();
+  const [sbUrlInput, setSbUrlInput] = useState(initialSupabaseCreds.url);
+  const [sbKeyInput, setSbKeyInput] = useState(initialSupabaseCreds.key);
+  const [sbSavingStatus, setSbSavingStatus] = useState<string | null>(null);
 
   if (!isAdminPanelOpen) return null;
 
@@ -1342,12 +1352,19 @@ export const AdminPanelModal: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={() => setIsAdminPanelOpen(false)}
-            className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>مزامنة مباشرة: Supabase (profiles, courses, documents, assignments)</span>
+            </span>
+
+            <button
+              onClick={() => setIsAdminPanelOpen(false)}
+              className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Notice feedback */}
@@ -1406,6 +1423,7 @@ export const AdminPanelModal: React.FC = () => {
             { id: 'payments', label: 'طرق الدفع', icon: CreditCard },
             { id: 'appearance', label: 'المظهر والتصميم', icon: Palette },
             { id: 'teacher_profile', label: 'ملف مستر عمرو السيد 👨‍🏫', icon: UserCheck },
+            { id: 'supabase', label: 'قاعدة بيانات Supabase ⚡', icon: Database },
             ...(canAccessSecretSection
               ? [
                   { id: 'exam_rankings', label: '🏆 تفنيد أعلى الدرجات والأوائل', icon: Trophy },
@@ -2335,7 +2353,7 @@ export const AdminPanelModal: React.FC = () => {
                 {/* Alternative: External Video URL */}
                 <div className="p-3 bg-[#050811] border border-cyan-950 rounded-xl space-y-1.5">
                   <label className="block text-xs font-semibold text-slate-300">
-                    أو إدخال رابط فيديو خارجي (YouTube / Google Drive / ميديا فاير / رابط مباشر):
+                    أو إدخال رابط فيديو خارجي (YouTube / Google Drive / Telegram تليجرام / رابط مباشر):
                   </label>
                   <input
                     type="url"
@@ -2344,11 +2362,11 @@ export const AdminPanelModal: React.FC = () => {
                       setVideoFileUrl(e.target.value);
                       if (e.target.value) setVideoFileObj(null);
                     }}
-                    placeholder="مثال: https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/..."
+                    placeholder="مثال: https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/... أو https://t.me/..."
                     className="w-full bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                   />
-                  <p className="text-[10px] text-slate-400">
-                    يدعم فيديوهات اليوتيوب والشورتس وروابط جوجل درايف وأي رابط MP4 مباشر.
+                  <p className="text-[10px] text-cyan-400">
+                    🔒 مشغل معزول بالكامل (Custom White-Label): يُعرض حصرياً داخل المنصة مع حجب الإعلانات وشعارات المنصات الخارجية وحظر الخروج أو نسخ الروابط.
                   </p>
                 </div>
 
@@ -3364,7 +3382,7 @@ export const AdminPanelModal: React.FC = () => {
                 {/* Alternative: External Document URL */}
                 <div className="p-3 bg-[#050811] border border-cyan-950 rounded-xl space-y-1.5">
                   <label className="block text-xs font-semibold text-slate-300">
-                    أو إدخال رابط مستند / مذكرة خارجي مباشر (PDF / Drive):
+                    أو إدخال رابط مستند / مذكرة خارجي مباشر (Google Drive / Telegram / رابط مباشر):
                   </label>
                   <input
                     type="url"
@@ -3373,9 +3391,12 @@ export const AdminPanelModal: React.FC = () => {
                       setDocFileUrl(e.target.value);
                       if (e.target.value) setDocFileObj(null);
                     }}
-                    placeholder="https://... رابط ملف PDF أو جوجل درايف مباشر"
+                    placeholder="https://... رابط جوجل درايف أو تليجرام أو ملف PDF مباشر"
                     className="w-full bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                   />
+                  <p className="text-[10px] text-cyan-400">
+                    🔒 عارض معزول بالكامل: تفتح الملفات وروابط درايف وتليجرام داخل المنصة فقط مع حجب أيقونة الخروج والتنزيل الخارجي.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -5684,6 +5705,136 @@ export const AdminPanelModal: React.FC = () => {
                   <span>حفظ وتحديث الملف الشخصي في قاعدة البيانات السحابية فوراً 💾</span>
                 </button>
               </form>
+            </div>
+          )}
+
+          {/* TAB: SUPABASE CONFIGURATION & CONNECTION (إعدادات وربط قاعدة بيانات Supabase) */}
+          {activeTab === 'supabase' && (
+            <div className="space-y-6 animate-fade-in">
+              <div className="bg-[#080d1b] border border-cyan-800/40 rounded-2xl p-5 space-y-5 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                      <Database className="w-5 h-5 text-emerald-400" />
+                      <span>إعدادات وتغيير بيانات ربط Supabase (URL & Key) ⚡</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      يمكنك هنا تعديل رابط المشروع ومفتاح الوصول (Anon Key) ليتم ربط المنصة فوراً بقاعدة بياناتك بدون إعادة تشغيل الخادم!
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-emerald-400 bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-800/50 font-bold flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      متصل ومفعل
+                    </span>
+                  </div>
+                </div>
+
+                {sbSavingStatus && (
+                  <div className="p-3 bg-emerald-950/60 border border-emerald-500/50 rounded-xl text-emerald-200 text-xs font-semibold flex items-center gap-2 animate-fade-in">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{sbSavingStatus}</span>
+                  </div>
+                )}
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!sbUrlInput.trim() || !sbKeyInput.trim()) {
+                      showNotice('⚠️ يرجى إدخال كل من URL والمفتاح Anon Key!');
+                      return;
+                    }
+                    const ok = updateActiveSupabaseCredentials(sbUrlInput, sbKeyInput);
+                    if (ok) {
+                      setSbSavingStatus('✅ تم تحديث بيانات الاتصال بنجاح وربط المنصة بقاعدة بيانات Supabase الجديدة فوراً!');
+                      showNotice('⚡ تم حفظ بيانات Supabase الجديدة وربط المنصة بها بنجاح تام!');
+                      setTimeout(() => setSbSavingStatus(null), 5000);
+                    } else {
+                      showNotice('⚠️ حدث خطأ أثناء حفظ البيانات، يرجى المحاولة مرة أخرى.');
+                    }
+                  }}
+                  className="space-y-4"
+                >
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-200 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <KeyRound className="w-3.5 h-3.5 text-cyan-400" />
+                        رابط المشروع (Project URL):
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-normal">
+                        مثال: https://xyzcompany.supabase.co
+                      </span>
+                    </label>
+                    <input
+                      type="url"
+                      required
+                      value={sbUrlInput}
+                      onChange={(e) => setSbUrlInput(e.target.value)}
+                      placeholder="https://your-project-id.supabase.co"
+                      className="w-full bg-[#050811] border border-cyan-900/60 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all text-left"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-200 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                        المفتاح العام (Anon Public Key):
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-normal">
+                        مفتاح anon public الموجود في إعدادات API في Supabase
+                      </span>
+                    </label>
+                    <textarea
+                      rows={3}
+                      required
+                      value={sbKeyInput}
+                      onChange={(e) => setSbKeyInput(e.target.value)}
+                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      className="w-full bg-[#050811] border border-cyan-900/60 rounded-xl px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all text-left"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  <div className="p-3 bg-cyan-950/40 border border-cyan-800/40 rounded-xl text-xs text-slate-300 space-y-1.5">
+                    <div className="font-bold text-cyan-300 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                      معلومات مهمة ومزايا:
+                    </div>
+                    <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-300">
+                      <li>تغيير هذه البيانات يقوم بتحديث جميع استدعاءات المنصة (الطلاب، المحاضرات، الامتحانات، الواجبات) فوراً.</li>
+                      <li>البيانات تحفظ محلياً في متصفحك وتبقى سارية تلقائياً عبر الجلسات.</li>
+                      <li>يمكنك أيضاً تزويدنا بالبيانات الجديدة مباشرة في المحادثة لنضعها كإعداد افتراضي دائم في كود المشروع وملف .env.</li>
+                    </ul>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                    <button
+                      type="submit"
+                      className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl transition-all shadow-lg shadow-emerald-600/30 cursor-pointer flex items-center gap-2"
+                    >
+                      <Save className="w-4 h-4" />
+                      <span>حفظ وتحديث الاتصال فوراً ⚡</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetActiveSupabaseCredentials();
+                        const def = getActiveSupabaseCredentials();
+                        setSbUrlInput(def.url);
+                        setSbKeyInput(def.key);
+                        showNotice('🔄 تم استعادة بيانات Supabase الافتراضية بنجاح!');
+                      }}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>استعادة الإعدادات الافتراضية</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           )}
 
