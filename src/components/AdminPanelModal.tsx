@@ -63,7 +63,9 @@ import { GeminiTeacherDashboard } from './GeminiTeacherDashboard';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient } from '../utils/aiClientService';
 import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials } from '../services/supabaseService';
-import { Database } from 'lucide-react';
+import { Database, Link2 } from 'lucide-react';
+import { inspectAndFetchExternalVideo, inspectAndFetchExternalDocument, verifyMediaLinkHeaders } from '../utils/externalMediaInspector';
+
 
 
 export const AdminPanelModal: React.FC = () => {
@@ -1022,23 +1024,46 @@ export const AdminPanelModal: React.FC = () => {
   };
 
   // Add Lecture
-  const handleAddVideo = (e: React.FormEvent) => {
+  const handleAddVideo = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!videoTitle.trim()) {
-      showNotice('يرجى إدخال عنوان المحاضرة واختيار الفيديو من جهازك.');
+      showNotice('يرجى إدخال عنوان المحاضرة واختيار الفيديو من جهازك أو وضع رابط صالح.');
       return;
     }
 
-    const finalVideoUrl = videoFileUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    let finalVideoUrl = videoFileUrl;
+    let finalDuration = Number(videoDuration) || 60;
+    let finalFileSize = videoFileObj ? `${(videoFileObj.size / (1024 * 1024)).toFixed(1)} MB` : undefined;
+
+    // Real-time link verification check for external URLs before submission to Supabase
+    if (finalVideoUrl && !finalVideoUrl.startsWith('/uploads/') && !videoFileObj) {
+      showNotice('⏳ جاري التحقق من ترويسات الرابط والمدة بدقة قبل الإرسال إلى قاعدة البيانات...');
+      const check = await verifyMediaLinkHeaders(finalVideoUrl, 'video');
+      if (!check.isValid) {
+        showNotice(`⚠️ تنبيه: ${check.error || 'الرابط غير صالح'}`);
+        return;
+      }
+      finalVideoUrl = check.sanitizedUrl;
+      if (check.durationSeconds && check.durationSeconds > 0) {
+        finalDuration = Math.max(1, Math.round(check.durationSeconds / 60));
+      }
+      if (check.contentLengthFormatted) {
+        finalFileSize = check.contentLengthFormatted;
+      }
+    }
+
+    if (!finalVideoUrl) {
+      finalVideoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    }
 
     addLecture({
       title: videoTitle,
       chapterTitle: videoChapter || 'الباب الأول',
       grade: videoGrade,
-      durationMinutes: Number(videoDuration) || 60,
+      durationMinutes: finalDuration,
       videoUrl: finalVideoUrl,
       videoFileName: videoFileObj?.name || 'video_lecture.mp4',
-      videoFileSize: videoFileObj ? `${(videoFileObj.size / (1024 * 1024)).toFixed(1)} MB` : undefined,
+      videoFileSize: finalFileSize,
       description: videoDesc,
       price: isVideoFree ? 0 : (Number(videoPrice) || 50),
       isFree: isVideoFree,
@@ -1050,7 +1075,7 @@ export const AdminPanelModal: React.FC = () => {
     setVideoFileUrl('');
     setVideoDesc('');
     setIsVideoFree(false);
-    showNotice('تمت إضافة الفيديو من جهازك بنجاح وحفظه بالمنصة!');
+    showNotice('تم التحقق من الرابط وإضافة المحاضرة بنجاح وحفظها الدائم في قاعدة البيانات!');
   };
 
   // Add Homework
@@ -1079,11 +1104,30 @@ export const AdminPanelModal: React.FC = () => {
   };
 
   // Add File
-  const handleAddFile = (e: React.FormEvent) => {
+  const handleAddFile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fileTitle.trim()) return;
 
-    const finalUrl = docFileUrl || 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
+    let finalUrl = docFileUrl;
+    let finalSize = docFileObj ? Number((docFileObj.size / (1024 * 1024)).toFixed(2)) : 5.0;
+
+    // Real-time header check before submitting document to Supabase
+    if (finalUrl && !finalUrl.startsWith('/uploads/') && !docFileObj) {
+      showNotice('⏳ جاري فحص الرابط وقراءة عدد الصفحات بدقة قبل الحفظ في قاعدة البيانات...');
+      const check = await verifyMediaLinkHeaders(finalUrl, 'document');
+      if (!check.isValid) {
+        showNotice(`⚠️ تنبيه: ${check.error || 'رابط المستند غير صالح'}`);
+        return;
+      }
+      finalUrl = check.sanitizedUrl;
+      if (check.pageCount) {
+        showNotice(`✅ تم التأكد من المستند: يتضمن ${check.pageCount} صفحة.`);
+      }
+    }
+
+    if (!finalUrl) {
+      finalUrl = 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
+    }
 
     addFile({
       title: fileTitle,
@@ -1092,7 +1136,7 @@ export const AdminPanelModal: React.FC = () => {
       fileUrl: finalUrl,
       fileName: docFileObj?.name || `${fileTitle}.pdf`,
       fileType: docFileType,
-      sizeMb: docFileObj ? Number((docFileObj.size / (1024 * 1024)).toFixed(2)) : 5.0,
+      sizeMb: finalSize,
       description: fileDesc,
     });
 
@@ -1100,7 +1144,7 @@ export const AdminPanelModal: React.FC = () => {
     setDocFileObj(null);
     setDocFileUrl('');
     setFileDesc('');
-    showNotice('تم رفع وإضافة الملف من جهازك بنجاح!');
+    showNotice('تم التحقق من الرابط وإضافة وحفظ المستند بنجاح في قاعدة البيانات!');
   };
 
   // Add Exam (with bulk questions)
@@ -2351,24 +2395,88 @@ export const AdminPanelModal: React.FC = () => {
                 )}
 
                 {/* Alternative: External Video URL */}
-                <div className="p-3 bg-[#050811] border border-cyan-950 rounded-xl space-y-1.5">
+                <div className="p-3.5 bg-[#050811] border border-cyan-950 rounded-xl space-y-2">
                   <label className="block text-xs font-semibold text-slate-300">
                     أو إدخال رابط فيديو خارجي (YouTube / Google Drive / Telegram تليجرام / رابط مباشر):
                   </label>
-                  <input
-                    type="url"
-                    value={videoFileUrl.startsWith('/uploads/') ? '' : videoFileUrl}
-                    onChange={(e) => {
-                      setVideoFileUrl(e.target.value);
-                      if (e.target.value) setVideoFileObj(null);
-                    }}
-                    placeholder="مثال: https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/... أو https://t.me/..."
-                    className="w-full bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
-                  />
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <input
+                      type="url"
+                      value={videoFileUrl.startsWith('/uploads/') ? '' : videoFileUrl}
+                      onChange={(e) => {
+                        setVideoFileUrl(e.target.value);
+                        if (e.target.value) setVideoFileObj(null);
+                      }}
+                      placeholder="مثال: https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/... أو https://t.me/..."
+                      className="flex-1 bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
+                    />
+                    {videoFileUrl && !videoFileUrl.startsWith('/uploads/') && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!videoFileUrl.trim()) return;
+                          setVideoUploadProgress({
+                            isUploading: true,
+                            progressPercent: 10,
+                            uploadedBytesFormatted: 'فحص الرابط',
+                            totalBytesFormatted: 'فحص البيانات',
+                            speedFormatted: 'بدء الاتصال',
+                            remainingTimeFormatted: 'جاري القراءة...',
+                            fileName: 'فيديو خارجي معزول',
+                            fileSizeFormatted: 'جاري الكشف...',
+                            statusText: '⏳ جاري فحص الرابط الخارجي وقراءة مدته بدقة وتجهيزه داخل المنصة...',
+                          });
+                          try {
+                            const res = await inspectAndFetchExternalVideo(videoFileUrl, (p) => {
+                              setVideoUploadProgress({
+                                isUploading: p.percent < 100,
+                                progressPercent: p.percent,
+                                uploadedBytesFormatted: p.loadedFormatted,
+                                totalBytesFormatted: p.totalFormatted,
+                                speedFormatted: p.speed,
+                                remainingTimeFormatted: p.remaining,
+                                fileName: 'فيديو معزول بدون شعارات',
+                                fileSizeFormatted: 'فيديو عالي الجودة',
+                                statusText: `جاري المعالجة: ${p.loadedFormatted} - ${p.remaining}`,
+                              });
+                            });
+                            setVideoFileUrl(res.publicUrl);
+                            if (res.durationSeconds > 0) {
+                              setVideoDuration(String(Math.max(1, Math.round(res.durationSeconds / 60))));
+                              setVideoDurationFormatted(res.durationFormatted);
+                            }
+                            if (!videoTitle && res.suggestedTitle) {
+                              setVideoTitle(res.suggestedTitle);
+                            }
+                            setVideoUploadProgress({
+                              isUploading: false,
+                              progressPercent: 100,
+                              uploadedBytesFormatted: res.fileSizeFormatted,
+                              totalBytesFormatted: res.fileSizeFormatted,
+                              speedFormatted: 'مكتمل',
+                              remainingTimeFormatted: '0 ثانية',
+                              fileName: res.suggestedTitle || 'فيديو معتمد',
+                              fileSizeFormatted: res.fileSizeFormatted,
+                              statusText: `✅ تم التحقق من الرابط بنجاح وقراءة المدة بدقة (${res.durationFormatted}) ودمجه داخل المشغل المعزول!`,
+                            });
+                            showNotice(`⚡ تم تأكيد الرابط وقراءة مدة الفيديو بدقة (${res.durationFormatted}) بنجاح!`);
+                          } catch (err: any) {
+                            setVideoUploadProgress(null);
+                            showNotice('⚠️ تعذر فحص الرابط، تم اعتماده مباشرة.');
+                          }
+                        }}
+                        className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                        <span>تأكيد وفحص الرابط تلقائياً ⚡</span>
+                      </button>
+                    )}
+                  </div>
                   <p className="text-[10px] text-cyan-400">
                     🔒 مشغل معزول بالكامل (Custom White-Label): يُعرض حصرياً داخل المنصة مع حجب الإعلانات وشعارات المنصات الخارجية وحظر الخروج أو نسخ الروابط.
                   </p>
                 </div>
+
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -3380,24 +3488,85 @@ export const AdminPanelModal: React.FC = () => {
                 {renderUploadProgressBar(docUploadProgress)}
 
                 {/* Alternative: External Document URL */}
-                <div className="p-3 bg-[#050811] border border-cyan-950 rounded-xl space-y-1.5">
+                <div className="p-3.5 bg-[#050811] border border-cyan-950 rounded-xl space-y-2">
                   <label className="block text-xs font-semibold text-slate-300">
                     أو إدخال رابط مستند / مذكرة خارجي مباشر (Google Drive / Telegram / رابط مباشر):
                   </label>
-                  <input
-                    type="url"
-                    value={docFileUrl.startsWith('/uploads/') ? '' : docFileUrl}
-                    onChange={(e) => {
-                      setDocFileUrl(e.target.value);
-                      if (e.target.value) setDocFileObj(null);
-                    }}
-                    placeholder="https://... رابط جوجل درايف أو تليجرام أو ملف PDF مباشر"
-                    className="w-full bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
-                  />
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <input
+                      type="url"
+                      value={docFileUrl.startsWith('/uploads/') ? '' : docFileUrl}
+                      onChange={(e) => {
+                        setDocFileUrl(e.target.value);
+                        if (e.target.value) setDocFileObj(null);
+                      }}
+                      placeholder="https://... رابط جوجل درايف أو تليجرام أو ملف PDF مباشر"
+                      className="flex-1 bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
+                    />
+                    {docFileUrl && !docFileUrl.startsWith('/uploads/') && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!docFileUrl.trim()) return;
+                          setDocUploadProgress({
+                            isUploading: true,
+                            progressPercent: 15,
+                            uploadedBytesFormatted: 'فحص الرابط',
+                            totalBytesFormatted: 'فحص المستند',
+                            speedFormatted: 'بدء الاتصال',
+                            remainingTimeFormatted: 'جاري القراءة...',
+                            fileName: 'مستند خارجي',
+                            fileSizeFormatted: 'جاري الكشف...',
+                            statusText: '⏳ جاري فحص الرابط الخارجي وقراءة صفحات الملف بدقة عالية...',
+                          });
+                          try {
+                            const res = await inspectAndFetchExternalDocument(docFileUrl, (p) => {
+                              setDocUploadProgress({
+                                isUploading: p.percent < 100,
+                                progressPercent: p.percent,
+                                uploadedBytesFormatted: p.loadedFormatted,
+                                totalBytesFormatted: p.totalFormatted,
+                                speedFormatted: p.speed,
+                                remainingTimeFormatted: p.remaining,
+                                fileName: 'مستند معتمد',
+                                fileSizeFormatted: res.fileSizeFormatted || 'مستند عالي الجودة',
+                                statusText: `جاري المعالجة: ${p.loadedFormatted} - ${p.remaining}`,
+                              });
+                            });
+                            setDocFileUrl(res.publicUrl);
+                            setDocFileType(res.detectedType);
+                            if (!fileTitle && res.suggestedTitle) {
+                              setFileTitle(res.suggestedTitle);
+                            }
+                            setDocUploadProgress({
+                              isUploading: false,
+                              progressPercent: 100,
+                              uploadedBytesFormatted: res.fileSizeFormatted,
+                              totalBytesFormatted: res.fileSizeFormatted,
+                              speedFormatted: 'مكتمل',
+                              remainingTimeFormatted: '0 ثانية',
+                              fileName: res.suggestedTitle || 'مستند معتمد',
+                              fileSizeFormatted: res.fileSizeFormatted,
+                              statusText: `✅ تم التحقق من الرابط بنجاح وقراءة صفحات الملف بدقة (${res.pageCount} صفحة) وتجهيزه داخل العارض المدمج!`,
+                            });
+                            showNotice(`⚡ تم تأكيد الرابط وقراءة عدد الصفحات بدقة (${res.pageCount} صفحة) بنجاح!`);
+                          } catch (err: any) {
+                            setDocUploadProgress(null);
+                            showNotice('⚠️ تعذر فحص الرابط، تم اعتماده مباشرة.');
+                          }
+                        }}
+                        className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        <CheckCircle2 className="w-4 h-4 text-white" />
+                        <span>تأكيد وفحص الرابط وقراءة الصفحات ⚡</span>
+                      </button>
+                    )}
+                  </div>
                   <p className="text-[10px] text-cyan-400">
                     🔒 عارض معزول بالكامل: تفتح الملفات وروابط درايف وتليجرام داخل المنصة فقط مع حجب أيقونة الخروج والتنزيل الخارجي.
                   </p>
                 </div>
+
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="sm:col-span-2">

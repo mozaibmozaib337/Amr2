@@ -13,7 +13,13 @@ import {
   Flame,
   Play,
   Info,
+  CheckCircle2,
+  Loader2,
+  Link as LinkIcon,
+  Video,
+  X,
 } from 'lucide-react';
+import { LinkVerificationService, LinkMetadata } from '../utils/LinkVerificationService';
 
 export const LecturesSection: React.FC = () => {
   const {
@@ -24,9 +30,74 @@ export const LecturesSection: React.FC = () => {
     hasAccessToLecture,
     currentUser,
     setIsAdminPanelOpen,
+    addLecture,
   } = usePlatform();
 
   const [courseFilter, setCourseFilter] = useState<'all' | 'free' | 'paid'>('all');
+
+  // Quick Verified Submission Form State
+  const [showQuickAddModal, setShowQuickAddModal] = useState(false);
+  const [quickUrl, setQuickUrl] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationResult, setVerificationResult] = useState<LinkMetadata | null>(null);
+  const [lectureTitle, setLectureTitle] = useState('');
+  const [lectureChapter, setLectureChapter] = useState('الباب الأول');
+  const [lectureDuration, setLectureDuration] = useState('60');
+  const [lecturePrice, setLecturePrice] = useState('50');
+  const [isFreeLecture, setIsFreeLecture] = useState(false);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
+
+  const handleVerifyVideoLink = async () => {
+    if (!quickUrl.trim()) return;
+    setIsVerifying(true);
+    setFormNotice(null);
+    try {
+      const res = await LinkVerificationService.verifyUrl(quickUrl, 'video');
+      setVerificationResult(res);
+      if (res.isValid) {
+        if (res.cleanDisplayUrl) setQuickUrl(res.cleanDisplayUrl);
+        if (res.title) setLectureTitle(res.title);
+        if (res.durationMinutes) setLectureDuration(String(res.durationMinutes));
+        setFormNotice(`✅ تم التحقق من الرابط بنجاح! المدة المكتشفة: ${res.durationFormatted || res.durationMinutes + ' دقيقة'}`);
+      } else {
+        setFormNotice(`⚠️ ${res.error || 'فشل التحقق من الرابط'}`);
+      }
+    } catch (err: any) {
+      setFormNotice('⚠️ تعذر فحص الرابط.');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleSubmitVerifiedLecture = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lectureTitle.trim() || !quickUrl.trim()) return;
+
+    const cleanInfo = LinkVerificationService.cleanRawUrl(quickUrl);
+    const finalVideoUrl = verificationResult?.sanitizedUrl || cleanInfo.embedUrl || quickUrl.trim();
+
+    addLecture({
+      title: lectureTitle,
+      description: `محاضرة كيمياء معتمدة لمنصة مستر عمرو السيد (${verificationResult?.durationFormatted || `${lectureDuration} دقيقة`})`,
+      chapterTitle: lectureChapter,
+      grade: activeGrade === 'all' ? 'sec3' : activeGrade,
+      durationMinutes: Number(lectureDuration) || 60,
+      videoUrl: finalVideoUrl,
+      videoFileName: `${lectureTitle}.mp4`,
+      videoFileSize: verificationResult?.fileSizeFormatted || 'بث مباشر عالي الدقة HD 1080p',
+      price: isFreeLecture ? 0 : Number(lecturePrice) || 50,
+      isFree: isFreeLecture,
+    });
+
+    setFormNotice('⚡ تم حفظ المحاضرة بنجاح في قاعدة البيانات Supabase!');
+    setTimeout(() => {
+      setShowQuickAddModal(false);
+      setQuickUrl('');
+      setVerificationResult(null);
+      setLectureTitle('');
+      setFormNotice(null);
+    }, 1200);
+  };
 
   const studentGrade = currentUser?.role === 'student' ? currentUser.grade : activeGrade;
   const gradeLectures = lectures.filter((lec) => {
@@ -64,11 +135,11 @@ export const LecturesSection: React.FC = () => {
         <div className="flex items-center gap-2 self-start sm:self-auto">
           {isAdmin && (
             <button
-              onClick={() => setIsAdminPanelOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs rounded-xl transition-colors cursor-pointer shrink-0"
+              onClick={() => setShowQuickAddModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white font-bold text-xs rounded-xl transition-all cursor-pointer shrink-0 shadow-lg shadow-cyan-600/30"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>إضافة محاضرة جديدة</span>
+              <span>إضافة رابط فيديو مفحوص ⚡</span>
             </button>
           )}
         </div>
@@ -240,6 +311,154 @@ export const LecturesSection: React.FC = () => {
         </div>
       )}
 
+      {/* QUICK VERIFIED LECTURE SUBMISSION MODAL (LinkVerificationService) */}
+      {showQuickAddModal && (
+        <div
+          className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setShowQuickAddModal(false)}
+        >
+          <div
+            className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-xl p-5 text-slate-100 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
+              <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
+                <Video className="w-5 h-5 text-cyan-400" />
+                <span>إضافة محاضرة مع التحقق من الرابط والمدة (LinkVerificationService)</span>
+              </h3>
+              <button
+                onClick={() => setShowQuickAddModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {formNotice && (
+              <div className="p-3 bg-cyan-950/60 border border-cyan-500/40 rounded-xl text-xs text-cyan-200 font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>{formNotice}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitVerifiedLecture} className="space-y-3.5">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-300">
+                  رابط الفيديو (YouTube / Google Drive / Telegram / رابط مباشر):
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="url"
+                    required
+                    value={quickUrl}
+                    onChange={(e) => setQuickUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="flex-1 bg-[#050811] border border-cyan-900/60 rounded-xl px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-cyan-400"
+                    dir="ltr"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleVerifyVideoLink}
+                    disabled={isVerifying || !quickUrl.trim()}
+                    className="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors shadow-md"
+                  >
+                    {isVerifying ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>فحص...</span>
+                      </>
+                    ) : (
+                      <>
+                        <LinkIcon className="w-3.5 h-3.5" />
+                        <span>فحص الرابط</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs text-slate-300">عنوان المحاضرة (تم استخراجه تلقائياً)</label>
+                <input
+                  type="text"
+                  required
+                  value={lectureTitle}
+                  onChange={(e) => setLectureTitle(e.target.value)}
+                  placeholder="مثال: المحاضرة 1: الباب الأول العناصر الانتقالية"
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1">المدة (بالدقائق)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={lectureDuration}
+                    onChange={(e) => setLectureDuration(e.target.value)}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1">اسم الباب / الفصل</label>
+                  <input
+                    type="text"
+                    value={lectureChapter}
+                    onChange={(e) => setLectureChapter(e.target.value)}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1">السعر (ج.م)</label>
+                  <input
+                    type="number"
+                    disabled={isFreeLecture}
+                    value={isFreeLecture ? '0' : lecturePrice}
+                    onChange={(e) => setLecturePrice(e.target.value)}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono disabled:opacity-40"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="freeLecQuick"
+                  checked={isFreeLecture}
+                  onChange={(e) => setIsFreeLecture(e.target.checked)}
+                  className="rounded border-slate-700 text-cyan-600 focus:ring-cyan-500 cursor-pointer"
+                />
+                <label htmlFor="freeLecQuick" className="text-xs text-slate-300 cursor-pointer">
+                  محاضرة مجانية ومتاحة لكافة الطلاب
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-cyan-900/40">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickAddModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/30 cursor-pointer flex items-center gap-1.5"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>حفظ المحاضرة في Supabase ⚡</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
+

@@ -9,6 +9,9 @@ import {
   RotateCw,
   Eye,
   Layers,
+  X,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 
 interface InBrowserPdfViewerProps {
@@ -36,6 +39,8 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
   const [renderError, setRenderError] = useState<string | null>(null);
   const [viewEngine, setViewEngine] = useState<'canvas' | 'native'>('canvas');
   const [viewMode, setViewMode] = useState<'single' | 'continuous'>('single');
+  const [isBrowserPageOpen, setIsBrowserPageOpen] = useState<boolean>(false);
+
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const continuousContainerRef = useRef<HTMLDivElement | null>(null);
@@ -61,6 +66,15 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
     setCurrentPage(1);
 
     const loadPdf = async () => {
+      // 1. If Telegram post: bypass PDF.js structure parse and immediately use isolated native view
+      if (fileUrl.includes('t.me') || fileUrl.includes('telegram.me')) {
+        if (!isCancelled) {
+          setViewEngine('native');
+          setIsLoading(false);
+        }
+        return;
+      }
+
       try {
         // Wait briefly for CDN script if needed
         let pdfjs = window.pdfjsLib;
@@ -204,17 +218,32 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
     renderAllPages();
   }, [viewMode, viewEngine, scale, rotation, numPages, isLoading]);
 
-  // Clean formatted URL for Google Drive preview or direct link
-  const isGoogleDrive = fileUrl.includes('drive.google.com');
+  // Clean formatted URL for Google Drive preview, Telegram direct embed, or direct PDF
+  let unwrappedFileUrl = fileUrl;
+  if (unwrappedFileUrl.includes('url=')) {
+    try {
+      const match = unwrappedFileUrl.match(/url=([^&]+)/);
+      if (match && match[1]) {
+        unwrappedFileUrl = decodeURIComponent(match[1]);
+      }
+    } catch {}
+  }
+
+  const isGoogleDrive = unwrappedFileUrl.includes('drive.google.com') || unwrappedFileUrl.includes('docs.google.com');
+  const tgMatch = unwrappedFileUrl.match(/(?:t\.me|telegram\.me)\/([a-zA-Z0-9_]+)\/(\d+)/i);
+  const isTelegram = !!tgMatch;
+
   const safeEmbedUrl = isGoogleDrive
     ? (() => {
-        const driveMatch = fileUrl.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([a-zA-Z0-9_-]+)/i);
+        const driveMatch = unwrappedFileUrl.match(/(?:drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)|docs\.google\.com\/(?:document|spreadsheets|presentation)\/d\/)([a-zA-Z0-9_-]+)/i);
         if (driveMatch && driveMatch[1]) {
           return `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
         }
-        return fileUrl.replace(/\/view(\?.*)?$/, '/preview');
+        return unwrappedFileUrl.replace(/\/view(\?.*)?$/, '/preview');
       })()
-    : fileUrl;
+    : isTelegram
+    ? `https://t.me/${tgMatch[1]}/${tgMatch[2]}?embed=1`
+    : unwrappedFileUrl;
 
   return (
     <div className="w-full h-full flex flex-col bg-[#070c18] rounded-xl overflow-hidden text-slate-100">
@@ -234,15 +263,19 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
             <span>مشغل تفاعلي Canvas</span>
           </button>
           <button
-            onClick={() => setViewEngine('native')}
-            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+            onClick={() => {
+              setViewEngine('native');
+              setIsBrowserPageOpen(true);
+            }}
+            className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
               viewEngine === 'native'
-                ? 'bg-cyan-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md'
+                : 'bg-emerald-950/80 text-emerald-300 hover:text-white border border-emerald-800/40'
             }`}
+            title="فتح المستند في صفحة كاملة داخل المنصة بقارئ المتصفح المباشر"
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span>عرض المتصفح المباشر</span>
+            <Eye className="w-3.5 h-3.5 text-emerald-300" />
+            <span>عرض في التصفح المباشر (صفحة داخل المنصة) ⚡</span>
           </button>
         </div>
 
@@ -381,6 +414,7 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
               src={safeEmbedUrl}
               title={title || fileName || 'عرض مستند PDF'}
               className="w-full h-full border-0"
+              sandbox="allow-scripts allow-same-origin allow-forms"
             />
           </div>
         )}
@@ -403,6 +437,76 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
           />
         )}
       </div>
+
+      {/* DEDICATED IN-PLATFORM FULL PAGE BROWSER VIEWER (صفحة جديدة كاملة داخل المنصة وليست تبويب خارجي مع زر الإغلاق X) */}
+      {isBrowserPageOpen && (
+        <div
+          className="fixed inset-0 z-70 bg-black/95 backdrop-blur-md flex flex-col animate-fade-in"
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {/* Header Bar */}
+          <div className="bg-[#070d1c] border-b border-cyan-800/80 px-4 py-3 flex items-center justify-between text-white shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                <Eye className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
+                  <span>{title || fileName || 'قراءة المستند بالتصفح المباشر'}</span>
+                  <span className="text-[10px] bg-cyan-950 text-cyan-400 px-2 py-0.5 rounded-full border border-cyan-800">
+                    صفحة مدمجة بالمنصة
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  عرض وقراءة المستند بنظام المتصفح المباشر مع الحماية من الخروج أو كشف المصدر
+                </p>
+              </div>
+            </div>
+
+            {/* Close Button X */}
+            <button
+              onClick={() => setIsBrowserPageOpen(false)}
+              className="p-2 rounded-xl bg-red-950/80 hover:bg-red-800 text-red-200 hover:text-white border border-red-700 transition-all cursor-pointer flex items-center gap-2 shadow-lg"
+              title="إغلاق والرجوع للمنصة (X)"
+            >
+              <X className="w-5 h-5" />
+              <span className="text-xs font-bold hidden sm:inline">إغلاق الصفحة ✕</span>
+            </button>
+          </div>
+
+          {/* Full Screen Reader Viewport */}
+          <div className="flex-1 bg-white relative overflow-hidden">
+            {/* Pop-out icon blocker mask for Google Drive */}
+            {isGoogleDrive && (
+              <>
+                <div
+                  className="absolute top-0 right-0 w-32 h-24 z-40 bg-transparent cursor-default pointer-events-auto"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+                <div
+                  className="absolute top-0 left-0 w-32 h-24 z-40 bg-transparent cursor-default pointer-events-auto"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+              </>
+            )}
+
+            <iframe
+              src={safeEmbedUrl}
+              title={title || fileName || 'عرض تصفح مباشر داخل المنصة'}
+              className="w-full h-full border-0 select-none"
+              sandbox="allow-scripts allow-same-origin allow-forms"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

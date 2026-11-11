@@ -109,7 +109,7 @@ interface PlatformContextType {
   logout: () => void;
   // Lectures / Videos
   lectures: Lecture[];
-  addLecture: (lecture: Omit<Lecture, 'id' | 'dateAdded'>) => void;
+  addLecture: (lecture: Omit<Lecture, 'id' | 'dateAdded'>) => Promise<{ success: boolean; error?: any; errorMessage?: string }> | void;
   updateLecture: (id: string, updated: Partial<Lecture>) => void;
   deleteLecture: (id: string) => void;
   // Homework
@@ -119,7 +119,7 @@ interface PlatformContextType {
   deleteHomework: (id: string) => void;
   // Files (PDF / Word / Excel / Images)
   files: FileDocument[];
-  addFile: (file: Omit<FileDocument, 'id' | 'dateAdded'>) => void;
+  addFile: (file: Omit<FileDocument, 'id' | 'dateAdded'>) => Promise<{ success: boolean; error?: any; errorMessage?: string }> | void;
   updateFile: (id: string, updated: Partial<FileDocument>) => void;
   deleteFile: (id: string) => void;
   // Exams
@@ -224,6 +224,8 @@ interface PlatformContextType {
   examSubmissions: ExamSubmission[];
   studentAccessMap: Record<string, StudentAccessState>;
   recordLectureEntry: (lectureId: string, lectureTitle: string) => void;
+  markLectureCompleted: (lectureId: string, lectureTitle: string) => Promise<{ success: boolean; completedAt: string }>;
+  isLectureCompleted: (lectureId: string) => boolean;
   recordExamResult: (
     examId: string,
     examTitle: string,
@@ -1277,6 +1279,96 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
+  // Live Tracking: Mark lecture completed by student & update Supabase
+  const markLectureCompleted = async (
+    lectureId: string,
+    lectureTitle: string
+  ): Promise<{ success: boolean; completedAt: string }> => {
+    const studentId = currentUser ? currentUser.id : 'guest_student';
+    const studentName = currentUser ? currentUser.name : 'طالب المنصة';
+    const now = new Date();
+    const timeFormatted = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    const dateFormatted = `${now.toLocaleDateString('ar-EG')} - ${timeFormatted}`;
+    const nowIso = now.toISOString();
+
+    // 1. Update state
+    setStudentAccessMap((prev) => {
+      const current = prev[studentId] || { lectures: {}, exams: {}, homeworks: {} };
+      const currentLec = current.lectures[lectureId] || { entered: true };
+      return {
+        ...prev,
+        [studentId]: {
+          ...current,
+          lectures: {
+            ...current.lectures,
+            [lectureId]: {
+              ...currentLec,
+              completed: true,
+              completedAt: dateFormatted,
+            },
+          },
+        },
+      };
+    });
+
+    // 2. Persist to Supabase in student_progress table
+    try {
+      await saveDocument('student_progress', `${studentId}_${lectureId}`, {
+        studentId,
+        studentName,
+        studentPhone: currentUser?.phone || '',
+        studentCode: currentUser?.studentCode || '',
+        grade: currentUser?.grade || 'sec3',
+        lectureId,
+        lectureTitle,
+        completedAt: nowIso,
+        completedAtFormatted: dateFormatted,
+        status: 'completed',
+      });
+    } catch (e) {
+      console.warn('[Supabase] Failed saving student_progress:', e);
+    }
+
+    // 3. Save to localStorage for instant persistence
+    try {
+      const storageKey = `amr_chem_completed_${studentId}`;
+      const existing = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      existing[lectureId] = { completed: true, date: dateFormatted };
+      localStorage.setItem(storageKey, JSON.stringify(existing));
+    } catch {}
+
+    // 4. Record Activity
+    if (currentUser) {
+      recordActivity({
+        studentId: currentUser.id,
+        studentName: currentUser.name,
+        studentPhone: currentUser.phone,
+        studentCode: currentUser.studentCode,
+        grade: currentUser.grade,
+        type: 'lecture_enter',
+        itemId: lectureId,
+        itemTitle: `إتمام حضور: ${lectureTitle}`,
+        status: 'completed',
+      });
+    }
+
+    return { success: true, completedAt: dateFormatted };
+  };
+
+  const isLectureCompleted = (lectureId: string): boolean => {
+    const studentId = currentUser ? currentUser.id : 'guest_student';
+    if (studentAccessMap[studentId]?.lectures[lectureId]?.completed) {
+      return true;
+    }
+    try {
+      const storageKey = `amr_chem_completed_${studentId}`;
+      const existing = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      return !!existing[lectureId]?.completed;
+    } catch {
+      return false;
+    }
+  };
+
   // Live Tracking: Record exam submission and score with smart MCQ + Essay double grading
   const recordExamResult = (
     examId: string,
@@ -1523,14 +1615,14 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // Add / Update / Delete Lecture
-  const addLecture = (lec: Omit<Lecture, 'id' | 'dateAdded'>) => {
+  const addLecture = async (lec: Omit<Lecture, 'id' | 'dateAdded'>) => {
     const newLec: Lecture = {
       ...lec,
       id: 'lec_' + Date.now(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setLectures((prev) => [newLec, ...prev]);
-    saveDocument('lectures', newLec.id, newLec);
+    return await saveDocument('lectures', newLec.id, newLec);
   };
 
   const updateLecture = (id: string, updated: Partial<Lecture>) => {
@@ -1568,14 +1660,14 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // Add / Delete File
-  const addFile = (file: Omit<FileDocument, 'id' | 'dateAdded'>) => {
+  const addFile = async (file: Omit<FileDocument, 'id' | 'dateAdded'>) => {
     const newFile: FileDocument = {
       ...file,
       id: 'file_' + Date.now(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setFiles((prev) => [newFile, ...prev]);
-    saveDocument('files', newFile.id, newFile);
+    return await saveDocument('files', newFile.id, newFile);
   };
 
   const deleteFile = (id: string) => {
@@ -2177,6 +2269,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         examSubmissions,
         studentAccessMap,
         recordLectureEntry,
+        markLectureCompleted,
+        isLectureCompleted,
         recordExamResult,
         updateExamSubmissionGrade,
         recordHomeworkAction,

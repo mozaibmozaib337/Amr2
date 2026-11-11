@@ -102,6 +102,9 @@ export interface Lecture {
   price: number;
   isFree?: boolean;
   dateAdded: string;
+  provider?: 'youtube' | 'drive' | 'local' | 'other';
+  external_id?: string;
+  original_url?: string;
 }
 
 export interface Question {
@@ -150,6 +153,9 @@ export interface FileDocument {
   fileType: 'pdf' | 'doc' | 'docx' | 'xls' | 'xlsx' | 'image' | 'other';
   dateAdded: string;
   description?: string;
+  provider?: 'youtube' | 'drive' | 'local' | 'other';
+  external_id?: string;
+  original_url?: string;
 }
 
 export interface WalletTransaction {

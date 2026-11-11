@@ -269,7 +269,11 @@ export function subscribeToCollection<T>(
  * Save or overwrite a document by ID in Supabase
  * Mirrors to both standard table (e.g. courses, documents, assignments, profiles) and legacy table
  */
-export async function saveDocument(collectionName: string, id: string, data: any): Promise<void> {
+export async function saveDocument(
+  collectionName: string,
+  id: string,
+  data: any
+): Promise<{ success: boolean; error?: any; errorMessage?: string }> {
   const cleanId = String(id);
   const cleanData = sanitizeForSupabase(data);
 
@@ -290,6 +294,9 @@ export async function saveDocument(collectionName: string, id: string, data: any
 
   // 2. Persist to Supabase across all candidate table aliases
   const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
+  let lastError: any = null;
+  let hasSuccess = false;
+
   try {
     const supabase = getSupabase();
     if (supabase) {
@@ -299,15 +306,28 @@ export async function saveDocument(collectionName: string, id: string, data: any
 
       for (const tbl of tables) {
         try {
-          await supabase.from(tbl).upsert(payload, { onConflict: 'id' });
-        } catch (tblErr) {
-          // Table may not exist yet in user's schema
+          const { error } = await supabase.from(tbl).upsert(payload, { onConflict: 'id' });
+          if (error) {
+            lastError = error;
+            console.error(`[Supabase Error on table '${tbl}']`, error.message, error);
+          } else {
+            hasSuccess = true;
+          }
+        } catch (tblErr: any) {
+          lastError = tblErr;
+          console.error(`[Supabase Exception on table '${tbl}']`, tblErr?.message || tblErr, tblErr);
         }
       }
     }
-  } catch (err) {
-    console.warn(`[Supabase] saveDocument notice for ${collectionName}/${cleanId}:`, err);
+  } catch (err: any) {
+    lastError = err;
+    console.error(`[Supabase saveDocument Error for ${collectionName}/${cleanId}]:`, err?.message || err, err);
   }
+
+  if (!hasSuccess && lastError) {
+    return { success: false, error: lastError, errorMessage: lastError.message || 'حدث خطأ في قاعدة البيانات' };
+  }
+  return { success: true };
 }
 
 /**
