@@ -21,10 +21,11 @@ import {
   ShieldCheck,
   Zap,
   Activity,
+  RotateCcw,
 } from 'lucide-react';
 import { Question, GradeLevel } from '../types';
 import { QuestionReviewEditor } from './QuestionReviewEditor';
-import { parseQuizWithAiClient, checkAiHealth, AiHealthStatus } from '../utils/aiClientService';
+import { parseQuizWithAiClient, checkAiHealth, resetAiConnection, AiHealthStatus } from '../utils/aiClientService';
 
 export const GeminiTeacherDashboard: React.FC = () => {
   const { currentUser, addExam, addHomework, activeGrade } = usePlatform();
@@ -49,6 +50,8 @@ export const GeminiTeacherDashboard: React.FC = () => {
   const [aiWarning, setAiWarning] = useState<string | null>(null);
   const [aiHealth, setAiHealth] = useState<AiHealthStatus | null>(null);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [isResettingAi, setIsResettingAi] = useState(false);
+  const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
   const [generatedQuestions, setGeneratedQuestions] = useState<Question[]>([]);
   const [suggestedTitle, setSuggestedTitle] = useState('امتحان كيمياء ذكي - مستر عمرو السيد');
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
@@ -63,9 +66,26 @@ export const GeminiTeacherDashboard: React.FC = () => {
 
   const handleCheckConnection = async () => {
     setIsCheckingHealth(true);
+    setResetSuccessMsg(null);
     const status = await checkAiHealth(true);
     setAiHealth(status);
     setIsCheckingHealth(false);
+  };
+
+  const handleEmergencyResetAi = async () => {
+    setIsResettingAi(true);
+    setAiError(null);
+    setAiWarning(null);
+    setResetSuccessMsg(null);
+    const status = await resetAiConnection();
+    setAiHealth(status);
+    if (status.healthy) {
+      setResetSuccessMsg(status.message || '⚡ تمت إعادة ضبط الطوارئ للذكاء الاصطناعي بنجاح!');
+      setTimeout(() => setResetSuccessMsg(null), 5000);
+    } else {
+      setAiError(status.message);
+    }
+    setIsResettingAi(false);
   };
 
   if (!isAuthorized) {
@@ -269,7 +289,7 @@ export const GeminiTeacherDashboard: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 self-start md:self-auto shrink-0">
+          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto shrink-0">
             <div className="p-2.5 bg-black/40 rounded-2xl border border-amber-500/30 flex items-center gap-2 text-xs">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
               <span className="text-slate-300 font-medium">نموذج نشط: {aiHealth?.activeModel || aiHealth?.primaryModel || 'gemini-4-hydrogen'}</span>
@@ -277,11 +297,21 @@ export const GeminiTeacherDashboard: React.FC = () => {
             <button
               type="button"
               onClick={handleCheckConnection}
-              disabled={isCheckingHealth}
+              disabled={isCheckingHealth || isResettingAi}
               className="px-3 py-2.5 bg-cyan-950/70 hover:bg-cyan-900/80 border border-cyan-500/40 rounded-2xl text-xs font-bold text-cyan-200 flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-60"
             >
               <Activity className={`w-3.5 h-3.5 ${isCheckingHealth ? 'animate-spin' : ''}`} />
               <span>{isCheckingHealth ? 'جاري الفحص...' : 'فحص اتصال Gemini'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleEmergencyResetAi}
+              disabled={isResettingAi || isCheckingHealth}
+              title="زر إعادة ضبط الطوارئ للذكاء الاصطناعي (مسح الكاش وإعادة تفعيل الاتصال فوراً)"
+              className="px-3 py-2.5 bg-amber-600 hover:bg-amber-500 border border-amber-400/60 rounded-2xl text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-amber-600/20 disabled:opacity-60"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isResettingAi ? 'animate-spin' : ''}`} />
+              <span>{isResettingAi ? 'إعادة التفعيل...' : 'إعادة ضبط الطوارئ'}</span>
             </button>
           </div>
         </div>
@@ -301,7 +331,7 @@ export const GeminiTeacherDashboard: React.FC = () => {
               ) : (
                 <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
               )}
-              <span>{aiHealth.message}</span>
+              <span>{resetSuccessMsg || aiHealth.message}</span>
             </div>
             <span className="text-[11px] opacity-80 font-mono">
               الأساسي: {aiHealth.primaryModel} | الاحتياطي: {aiHealth.fallbackModel}

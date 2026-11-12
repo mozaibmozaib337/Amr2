@@ -267,6 +267,9 @@ interface PlatformContextType {
   // Teacher Personal Profile
   teacherProfile: TeacherProfile;
   updateTeacherProfile: (profile: Partial<TeacherProfile>) => void;
+  // Auto-save telemetry
+  lastAutoSavedAt: string | null;
+  isAutoSaving: boolean;
 }
 
 const PlatformContext = createContext<PlatformContextType | undefined>(undefined);
@@ -600,6 +603,45 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
+  const [isAutoSaving, setIsAutoSaving] = useState(false);
+
+  const syncServerStorePatch = async (patch: Record<string, any>) => {
+    setIsAutoSaving(true);
+    try {
+      await fetch('/api/platform-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      setLastAutoSavedAt(new Date().toISOString());
+    } catch {
+      // Non-blocking fallback
+    } finally {
+      setIsAutoSaving(false);
+    }
+  };
+
+  // Hydrate shared settings & teacherProfile from server store on boot
+  useEffect(() => {
+    let mounted = true;
+    fetch('/api/platform-data')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (!mounted || !res?.data) return;
+        if (res.data.settings && !localStorage.getItem('amr_chem_settings')) {
+          setSettings((prev) => ({ ...prev, ...res.data.settings }));
+        }
+        if (res.data.teacherProfile && !localStorage.getItem('amr_chem_teacher_profile')) {
+          setTeacherProfile((prev) => ({ ...prev, ...res.data.teacherProfile }));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const updateTeacherProfile = (updated: Partial<TeacherProfile>) => {
     setTeacherProfile((prev) => {
       const next = { ...prev, ...updated, updatedAt: new Date().toISOString() };
@@ -607,6 +649,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         localStorage.setItem('amr_chem_teacher_profile', JSON.stringify(next));
       } catch {}
       saveDocument('teacher_profile', 'mr_amr', next);
+      syncServerStorePatch({ teacherProfile: next });
       return next;
     });
   };
@@ -685,6 +728,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setRegisteredAccounts((prev) => [newStudent, ...prev]);
     saveDocument('registered_accounts', newStudent.id, newStudent);
+    setLastAutoSavedAt(new Date().toISOString());
     return newStudent;
   };
 
@@ -692,7 +736,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setRegisteredAccounts((prev) =>
       prev.map((acc) => (acc.id === id ? { ...acc, ...data } : acc))
     );
-    updateDocument('registered_accounts', id, data);
+    updateDocument('registered_accounts', id, data).then(() => {
+      setLastAutoSavedAt(new Date().toISOString());
+    });
   };
 
   const deleteRegisteredStudent = (id: string) => {
@@ -1633,12 +1679,30 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setLectures((prev) => [newLec, ...prev]);
-    return await saveDocument('lectures', newLec.id, newLec);
+    setIsAutoSaving(true);
+    const res = await saveDocument('lectures', newLec.id, newLec);
+    setIsAutoSaving(false);
+    setLastAutoSavedAt(new Date().toISOString());
+    return res;
   };
 
   const updateLecture = (id: string, updated: Partial<Lecture>) => {
-    setLectures((prev) => prev.map((l) => (l.id === id ? { ...l, ...updated } : l)));
-    updateDocument('lectures', id, updated);
+    let mergedItem: Lecture | null = null;
+    setLectures((prev) =>
+      prev.map((l) => {
+        if (l.id === id) {
+          mergedItem = { ...l, ...updated };
+          return mergedItem;
+        }
+        return l;
+      })
+    );
+    setIsAutoSaving(true);
+    const op = mergedItem ? saveDocument('lectures', id, mergedItem) : updateDocument('lectures', id, updated);
+    Promise.resolve(op).finally(() => {
+      setIsAutoSaving(false);
+      setLastAutoSavedAt(new Date().toISOString());
+    });
   };
 
   const deleteLecture = (id: string) => {
@@ -1647,6 +1711,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (activeVideo && 'id' in activeVideo && activeVideo.id === id) {
       setActiveVideo(null);
     }
+    setLastAutoSavedAt(new Date().toISOString());
   };
 
   // Add / Update / Delete Homework
@@ -1657,17 +1722,36 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setHomeworks((prev) => [newHw, ...prev]);
-    saveDocument('homeworks', newHw.id, newHw);
+    setIsAutoSaving(true);
+    saveDocument('homeworks', newHw.id, newHw).finally(() => {
+      setIsAutoSaving(false);
+      setLastAutoSavedAt(new Date().toISOString());
+    });
   };
 
   const updateHomework = (id: string, updated: Partial<Homework>) => {
-    setHomeworks((prev) => prev.map((h) => (h.id === id ? { ...h, ...updated } : h)));
-    updateDocument('homeworks', id, updated);
+    let mergedItem: Homework | null = null;
+    setHomeworks((prev) =>
+      prev.map((h) => {
+        if (h.id === id) {
+          mergedItem = { ...h, ...updated };
+          return mergedItem;
+        }
+        return h;
+      })
+    );
+    setIsAutoSaving(true);
+    const op = mergedItem ? saveDocument('homeworks', id, mergedItem) : updateDocument('homeworks', id, updated);
+    Promise.resolve(op).finally(() => {
+      setIsAutoSaving(false);
+      setLastAutoSavedAt(new Date().toISOString());
+    });
   };
 
   const deleteHomework = (id: string) => {
     deleteDocument('homeworks', id);
     setHomeworks((prev) => prev.filter((item) => item.id !== id));
+    setLastAutoSavedAt(new Date().toISOString());
   };
 
   // Add / Delete File
@@ -1678,7 +1762,11 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setFiles((prev) => [newFile, ...prev]);
-    return await saveDocument('files', newFile.id, newFile);
+    setIsAutoSaving(true);
+    const res = await saveDocument('files', newFile.id, newFile);
+    setIsAutoSaving(false);
+    setLastAutoSavedAt(new Date().toISOString());
+    return res;
   };
 
   const deleteFile = (id: string) => {
@@ -1687,11 +1775,26 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (activeDocument && activeDocument.fileUrl === files.find((f) => f.id === id)?.fileUrl) {
       setActiveDocument(null);
     }
+    setLastAutoSavedAt(new Date().toISOString());
   };
 
   const updateFile = (id: string, updated: Partial<FileDocument>) => {
-    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, ...updated } : f)));
-    updateDocument('files', id, updated);
+    let mergedItem: FileDocument | null = null;
+    setFiles((prev) =>
+      prev.map((f) => {
+        if (f.id === id) {
+          mergedItem = { ...f, ...updated };
+          return mergedItem;
+        }
+        return f;
+      })
+    );
+    setIsAutoSaving(true);
+    const op = mergedItem ? saveDocument('files', id, mergedItem) : updateDocument('files', id, updated);
+    Promise.resolve(op).finally(() => {
+      setIsAutoSaving(false);
+      setLastAutoSavedAt(new Date().toISOString());
+    });
   };
 
   // Add / Update / Delete Exam
@@ -1702,17 +1805,36 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setExams((prev) => [newExam, ...prev]);
-    saveDocument('exams', newExam.id, newExam);
+    setIsAutoSaving(true);
+    saveDocument('exams', newExam.id, newExam).finally(() => {
+      setIsAutoSaving(false);
+      setLastAutoSavedAt(new Date().toISOString());
+    });
   };
 
   const updateExam = (id: string, updated: Partial<Exam>) => {
-    setExams((prev) => prev.map((e) => (e.id === id ? { ...e, ...updated } : e)));
-    updateDocument('exams', id, updated);
+    let mergedItem: Exam | null = null;
+    setExams((prev) =>
+      prev.map((e) => {
+        if (e.id === id) {
+          mergedItem = { ...e, ...updated };
+          return mergedItem;
+        }
+        return e;
+      })
+    );
+    setIsAutoSaving(true);
+    const op = mergedItem ? saveDocument('exams', id, mergedItem) : updateDocument('exams', id, updated);
+    Promise.resolve(op).finally(() => {
+      setIsAutoSaving(false);
+      setLastAutoSavedAt(new Date().toISOString());
+    });
   };
 
   const deleteExam = (id: string) => {
     deleteDocument('exams', id);
     setExams((prev) => prev.filter((item) => item.id !== id));
+    setLastAutoSavedAt(new Date().toISOString());
   };
 
   // Add / Delete Honored Students
@@ -1771,9 +1893,17 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setPaymentMethods((prev) => prev.filter((m) => m.id !== id));
   };
 
-  // Settings
+  // Settings (Auto-saved immediately to DOM, localStorage, Supabase cache, and server store)
   const updateSettings = (newSettings: Partial<PlatformSettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
+    setSettings((prev) => {
+      const next = { ...prev, ...newSettings };
+      try {
+        localStorage.setItem('amr_chem_settings', JSON.stringify(next));
+      } catch {}
+      saveDocument('platform_settings', 'global_settings', next);
+      syncServerStorePatch({ settings: next });
+      return next;
+    });
   };
 
   // Whitelist Authorization: requires BOTH phone AND registered code
@@ -1955,6 +2085,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }));
 
     setAuthorizedStudents((prev) => [...newItems, ...prev]);
+    bulkSaveDocuments('authorized_students', newItems);
+    setLastAutoSavedAt(new Date().toISOString());
     return newItems.length;
   };
 
@@ -2301,6 +2433,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setIsNotificationModalOpen,
         teacherProfile,
         updateTeacherProfile,
+        lastAutoSavedAt,
+        isAutoSaving,
       }}
     >
       {children}

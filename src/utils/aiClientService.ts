@@ -186,6 +186,42 @@ export async function checkAiHealth(probe: boolean = false): Promise<AiHealthSta
   };
 }
 
+export async function resetAiConnection(): Promise<AiHealthStatus> {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('amr_chem_ai_status_cache');
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('amr_chem_ai_status_cache');
+    }
+  } catch {
+    // Ignore storage error
+  }
+
+  try {
+    const response = await fetch('/api/ai-reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timestamp: Date.now() }),
+    });
+    const data = await response.json().catch(() => null);
+    if (data) {
+      return data;
+    }
+  } catch {
+    // Server offline
+  }
+
+  return {
+    configured: false,
+    healthy: false,
+    primaryModel: 'gemini-4-hydrogen',
+    fallbackModel: 'gemini-3.1-flash-lite',
+    errorCode: 'NETWORK',
+    message: 'تعذر الوصول إلى خادم إعادة الضبط حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.',
+  };
+}
+
 export async function parseQuizWithAiClient(payload: {
   fileData?: string;
   mimeType?: string;

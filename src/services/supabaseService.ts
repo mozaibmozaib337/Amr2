@@ -301,67 +301,99 @@ function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
 /**
  * Converts a Supabase snake_case row back into the app's camelCase structure.
  */
-function mapRowFromTable(tbl: string, row: any): any {
+function mapRowFromTable(tbl: string, row: any, existing?: any): any {
   if (!row || typeof row !== 'object') return row;
+  const base = existing && typeof existing === 'object' ? existing : {};
 
   if (tbl === 'courses') {
-    const extId = row.external_id || undefined;
-    const rawCandidate = String(row.video_url || row.videoUrl || row.original_url || '');
-    const isDrive = row.provider === 'drive' || /drive\.google\.com|drive\.usercontent\.google\.com/i.test(rawCandidate);
+    const extId = row.external_id || base.external_id || undefined;
+    const rawCandidate = String(row.video_url || row.videoUrl || row.original_url || base.videoUrl || '');
+    const isDrive =
+      row.provider === 'drive' ||
+      base.provider === 'drive' ||
+      /drive\.google\.com|drive\.usercontent\.google\.com/i.test(rawCandidate);
     const driveIdMatch = rawCandidate.match(/(?:\/d\/|id=)([a-zA-Z0-9_-]{10,})/i);
     const resolvedDriveId = extId || (driveIdMatch ? driveIdMatch[1] : undefined);
-    const videoUrl = isDrive && resolvedDriveId
-      ? `https://drive.google.com/file/d/${resolvedDriveId}/preview`
-      : row.video_url ||
-        row.videoUrl ||
-        (extId
-          ? `https://www.youtube-nocookie.com/embed/${extId}?controls=0&rel=0&modestbranding=1&disablekb=1&fs=0&iv_load_policy=3&playsinline=1&cc_load_policy=0&hl=ar`
-          : '');
+    const videoUrl =
+      isDrive && resolvedDriveId
+        ? `https://drive.google.com/file/d/${resolvedDriveId}/preview`
+        : row.video_url ||
+          row.videoUrl ||
+          base.videoUrl ||
+          (extId
+            ? `https://www.youtube-nocookie.com/embed/${extId}?controls=0&rel=0&modestbranding=1&disablekb=1&fs=0&iv_load_policy=3&playsinline=1&cc_load_policy=0&hl=ar`
+            : '');
 
     return {
+      ...base,
       id: String(row.id),
-      title: row.title || 'محاضرة كيمياء',
-      description: row.description || '',
-      chapterTitle: row.chapterTitle || row.chapter_title || 'الباب الأول',
-      grade: row.grade || 'sec3',
-      durationMinutes: Number(row.durationMinutes ?? row.duration_minutes ?? 60),
+      title: row.title || base.title || 'محاضرة كيمياء',
+      description: row.description ?? base.description ?? '',
+      chapterTitle: row.chapterTitle || row.chapter_title || base.chapterTitle || 'الباب الأول',
+      grade: row.grade || base.grade || 'sec3',
+      durationMinutes: Number(row.durationMinutes ?? row.duration_minutes ?? base.durationMinutes ?? 60),
       videoUrl,
-      videoFileName: extId ? (isDrive ? `drive_${extId}.mp4` : `youtube_${extId}.mp4`) : 'lecture.mp4',
-      videoFileSize: row.provider === 'drive' || isDrive ? 'Google Drive HD' : row.provider === 'youtube' ? 'YouTube HD' : undefined,
-      price: Number(row.price ?? 0),
-      isFree: Number(row.price ?? 0) === 0,
-      dateAdded: row.created_at ? String(row.created_at).split('T')[0] : new Date().toISOString().split('T')[0],
-      provider: row.provider || (isDrive ? 'drive' : extId ? 'youtube' : 'other'),
+      videoFileName: base.videoFileName || (extId ? (isDrive ? `drive_${extId}.mp4` : `youtube_${extId}.mp4`) : 'lecture.mp4'),
+      videoFileSize:
+        row.provider === 'drive' || isDrive
+          ? 'Google Drive HD'
+          : row.provider === 'youtube'
+          ? 'YouTube HD'
+          : base.videoFileSize,
+      price: Number(row.price ?? base.price ?? 0),
+      isFree: Number(row.price ?? base.price ?? 0) === 0,
+      dateAdded: row.created_at ? String(row.created_at).split('T')[0] : base.dateAdded || new Date().toISOString().split('T')[0],
+      provider: row.provider || base.provider || (isDrive ? 'drive' : extId ? 'youtube' : 'other'),
       external_id: resolvedDriveId || extId,
-      original_url: row.original_url || videoUrl,
+      original_url: row.original_url || base.original_url || videoUrl,
     };
   }
 
   if (tbl === 'documents') {
-    const extId = row.external_id || undefined;
+    const extId = row.external_id || base.external_id || undefined;
     const fileUrl =
       row.file_url ||
       row.fileUrl ||
+      base.fileUrl ||
       (extId ? `https://drive.google.com/file/d/${extId}/preview` : '');
 
     return {
+      ...base,
       id: String(row.id),
-      title: row.title || 'مذكرة كيمياء',
-      category: row.category || 'مذكرات الشرح',
-      grade: row.grade || 'sec3',
+      title: row.title || base.title || 'مذكرة كيمياء',
+      category: row.category || base.category || 'مذكرات الشرح',
+      grade: row.grade || base.grade || 'sec3',
       fileUrl,
-      fileName: row.file_name || `${row.title || 'document'}.pdf`,
-      fileType: row.file_type || 'pdf',
-      sizeMb: Number(row.size_mb ?? 5.0),
-      description: row.description || 'مذكرة كيمياء معتمدة',
-      dateAdded: row.created_at ? String(row.created_at).split('T')[0] : new Date().toISOString().split('T')[0],
-      provider: row.provider || (extId ? 'drive' : 'other'),
+      fileName: row.file_name || base.fileName || `${row.title || 'document'}.pdf`,
+      fileType: row.file_type || base.fileType || 'pdf',
+      sizeMb: Number(row.size_mb ?? base.sizeMb ?? 5.0),
+      description: row.description || base.description || 'مذكرة كيمياء معتمدة',
+      dateAdded: row.created_at ? String(row.created_at).split('T')[0] : base.dateAdded || new Date().toISOString().split('T')[0],
+      provider: row.provider || base.provider || (extId ? 'drive' : 'other'),
       external_id: extId,
-      original_url: row.original_url || fileUrl,
+      original_url: row.original_url || base.original_url || fileUrl,
     };
   }
 
-  return row;
+  if (tbl === 'assignments') {
+    return {
+      ...base,
+      id: String(row.id),
+      title: row.title || base.title || 'اختبار كيمياء',
+      grade: row.grade || base.grade || 'sec3',
+      type: row.type || base.type || 'exam',
+    };
+  }
+
+  if (tbl === 'profiles') {
+    return {
+      ...base,
+      id: String(row.id),
+      grade: row.grade || base.grade || 'sec3',
+    };
+  }
+
+  return { ...base, ...row };
 }
 
 /**
@@ -408,7 +440,19 @@ export function subscribeToCollection<T>(
           }
           const { data, error } = await query;
           if (!error && data && data.length > 0) {
-            foundData = data.map((r) => mapRowFromTable(tbl, r));
+            const latestCache = getLocalCache<any>(collectionName) || [];
+            const cacheById = new Map<string, any>();
+            latestCache.forEach((it) => {
+              const rawKey = String(it?.id || it?.code || '');
+              if (rawKey) {
+                cacheById.set(rawKey, it);
+                cacheById.set(ensureUuid(rawKey), it);
+              }
+            });
+            foundData = data.map((r) => {
+              const matchedExisting = cacheById.get(String(r.id)) || cacheById.get(ensureUuid(String(r.id)));
+              return mapRowFromTable(tbl, r, matchedExisting);
+            });
             break;
           }
         } catch {
@@ -533,39 +577,64 @@ export async function saveDocument(
 /**
  * Update partial fields of a document in Supabase
  */
-export async function updateDocument(collectionName: string, id: string, partial: any): Promise<void> {
+export async function updateDocument(collectionName: string, id: string, partial: any): Promise<{ success: boolean; error?: any }> {
   const cleanId = ensureUuid(String(id));
   const cleanPartial = sanitizeForSupabase(partial);
 
-  // 1. Update local cache immediately
+  // 1. Update local cache immediately and capture merged item for reliable upsert
+  let mergedFullItem: any = null;
   try {
     const existing = getLocalCache<any>(collectionName) || [];
     const idx = existing.findIndex((item) => String(item.id || item.code) === String(id) || String(item.id) === cleanId);
     if (idx >= 0) {
+      mergedFullItem = { ...existing[idx], ...cleanPartial, id: existing[idx].id || String(id) };
       const updatedList = [...existing];
-      updatedList[idx] = { ...updatedList[idx], ...cleanPartial };
+      updatedList[idx] = mergedFullItem;
       setLocalCache(collectionName, updatedList);
+    } else if (cleanPartial && typeof cleanPartial === 'object') {
+      mergedFullItem = { ...cleanPartial, id: String(id) };
+      setLocalCache(collectionName, [mergedFullItem, ...existing]);
     }
   } catch {}
 
   const tables = TABLE_MAPPINGS[collectionName];
-  if (!tables || tables.length === 0) return;
+  if (!tables || tables.length === 0) return { success: true };
+
+  let hasSuccess = false;
+  let lastError: any = null;
 
   try {
     const supabase = getSupabase();
     if (supabase) {
       for (const tbl of tables) {
         try {
-          const mappedPartial = mapPartialForTable(tbl, cleanPartial);
-          if (Object.keys(mappedPartial).length > 0) {
-            await supabase.from(tbl).update(mappedPartial).eq('id', cleanId);
+          if (mergedFullItem) {
+            const fullPayload = mapPayloadForTable(tbl, collectionName, cleanId, mergedFullItem);
+            const { error } = await supabase.from(tbl).upsert(fullPayload, { onConflict: 'id' });
+            if (!error) {
+              hasSuccess = true;
+            } else {
+              lastError = error;
+            }
+          } else {
+            const mappedPartial = mapPartialForTable(tbl, cleanPartial);
+            if (Object.keys(mappedPartial).length > 0) {
+              const { error } = await supabase.from(tbl).update(mappedPartial).eq('id', cleanId);
+              if (!error) hasSuccess = true;
+              else lastError = error;
+            }
           }
-        } catch {}
+        } catch (tblErr) {
+          lastError = tblErr;
+        }
       }
     }
   } catch (err) {
+    lastError = err;
     console.warn(`[Supabase] updateDocument notice for ${collectionName}/${cleanId}:`, err);
   }
+
+  return hasSuccess ? { success: true } : { success: false, error: lastError };
 }
 
 /**

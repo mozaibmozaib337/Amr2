@@ -725,6 +725,7 @@ export const VideoPlayerModal: React.FC = () => {
   return (
     <div
       ref={containerRef}
+      data-keep-dark="true"
       onContextMenu={(e) => e.preventDefault()}
       onPointerMove={(e) => {
         if (e.pointerType === 'mouse') {

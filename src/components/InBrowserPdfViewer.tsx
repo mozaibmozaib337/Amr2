@@ -306,6 +306,7 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
   return (
     <div
       ref={viewerRootRef}
+      data-keep-dark={isPdfFullscreen ? 'true' : undefined}
       onClick={() => {
         if (isPdfFullscreen) {
           setShowFsControls((prev) => {

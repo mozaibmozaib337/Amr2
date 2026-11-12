@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { usePlatform } from '../context/PlatformContext';
 import {
   X,
@@ -34,6 +34,7 @@ import {
   Save,
   Loader2,
   RefreshCw,
+  RotateCcw,
   Zap,
   Download,
   Send,
@@ -61,7 +62,7 @@ import { optimizeImageForAi } from '../utils/fileOptimizer';
 import { uploadFileWithRealProgress, probeVideoDuration } from '../utils/realUploader';
 import { GeminiTeacherDashboard } from './GeminiTeacherDashboard';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
-import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient } from '../utils/aiClientService';
+import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient, resetAiConnection } from '../utils/aiClientService';
 import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials } from '../services/supabaseService';
 import { Database, Link2 } from 'lucide-react';
 import { parseYouTubeUrl, parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
@@ -133,6 +134,8 @@ export const AdminPanelModal: React.FC = () => {
     getStudentDossier,
     teacherProfile,
     updateTeacherProfile,
+    lastAutoSavedAt,
+    isAutoSaving,
   } = usePlatform();
 
   // Strict Secret Section Security Check:
@@ -386,12 +389,164 @@ export const AdminPanelModal: React.FC = () => {
   const [sbKeyInput, setSbKeyInput] = useState(initialSupabaseCreds.key);
   const [sbSavingStatus, setSbSavingStatus] = useState<string | null>(null);
 
-  if (!isAdminPanelOpen) return null;
+  // AI Emergency Reset State & Auto-Save Sync Refs (Strictly before any early return)
+  const [isResettingAi, setIsResettingAi] = useState(false);
+  const profileDirtyRef = useRef(false);
+  const prevLectureIdRef = useRef<string | null>(null);
+  const lastSyncedLectureRef = useRef<string>('');
+  const prevHwIdRef = useRef<string | null>(null);
+  const lastSyncedHwRef = useRef<string>('');
+  const prevExamIdRef = useRef<string | null>(null);
+  const lastSyncedExamRef = useRef<string>('');
+  const prevFileIdRef = useRef<string | null>(null);
+  const lastSyncedFileRef = useRef<string>('');
 
   const showNotice = (msg: string) => {
     setNotification(msg);
     setTimeout(() => setNotification(null), 3500);
   };
+
+  const handleEmergencyResetAi = async () => {
+    if (isResettingAi) return;
+    setIsResettingAi(true);
+    try {
+      const res = await resetAiConnection();
+      if (res.healthy) {
+        showNotice(`✅ ${res.message}`);
+      } else {
+        showNotice(`⚠️ ${res.message}`);
+      }
+    } catch {
+      showNotice('❌ تعذر إعادة ضبط اتصال الذكاء الاصطناعي حالياً.');
+    } finally {
+      setIsResettingAi(false);
+    }
+  };
+
+  // Sync draftSettings when platform settings load from cloud
+  useEffect(() => {
+    setDraftSettings(settings);
+  }, [settings]);
+
+  // Sync teacher profile inputs when hydrated from Supabase (only if not currently edited)
+  useEffect(() => {
+    if (!teacherProfile || profileDirtyRef.current) return;
+    setProfName(teacherProfile.name || 'مستر عمرو السيد');
+    setProfTitle(teacherProfile.title || 'خبير مادة الكيمياء للثانوية العامة والأزهرية');
+    setProfBio(teacherProfile.bio || '');
+    setProfPhone(teacherProfile.phone || '01069780486');
+    setProfWhatsapp(teacherProfile.whatsapp || '+201069780486');
+    setProfEmail(teacherProfile.email || 'Amr.ElSayed@Chemistry.Edu');
+    setProfOffice(teacherProfile.officeAddress || 'محافظة الدقهلية / المنصورة / القاهرة');
+    setProfAnnouncement(teacherProfile.announcementText || '');
+  }, [teacherProfile]);
+
+  // Debounced auto-save for Teacher Profile edits
+  useEffect(() => {
+    if (!isAdminPanelOpen || !profileDirtyRef.current) return;
+    const timer = setTimeout(() => {
+      updateTeacherProfile({
+        name: profName,
+        title: profTitle,
+        bio: profBio,
+        phone: profPhone,
+        whatsapp: profWhatsapp,
+        email: profEmail,
+        officeAddress: profOffice,
+        announcementText: profAnnouncement,
+      });
+      profileDirtyRef.current = false;
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [isAdminPanelOpen, profName, profTitle, profBio, profPhone, profWhatsapp, profEmail, profOffice, profAnnouncement, updateTeacherProfile]);
+
+  // Debounced auto-save for Published Lecture editing modal
+  useEffect(() => {
+    if (!editingLecture) {
+      prevLectureIdRef.current = null;
+      lastSyncedLectureRef.current = '';
+      return;
+    }
+    const serialized = JSON.stringify(editingLecture);
+    if (prevLectureIdRef.current !== editingLecture.id) {
+      prevLectureIdRef.current = editingLecture.id;
+      lastSyncedLectureRef.current = serialized;
+      return;
+    }
+    if (serialized === lastSyncedLectureRef.current) return;
+    const timer = setTimeout(() => {
+      lastSyncedLectureRef.current = serialized;
+      updateLecture(editingLecture.id, editingLecture);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, [editingLecture, updateLecture]);
+
+  // Debounced auto-save for Published Homework & Questions editing modal
+  useEffect(() => {
+    if (!editingHomework) {
+      prevHwIdRef.current = null;
+      lastSyncedHwRef.current = '';
+      return;
+    }
+    const payload = { ...editingHomework, questions: editingHomeworkQuestions };
+    const serialized = JSON.stringify(payload);
+    if (prevHwIdRef.current !== editingHomework.id) {
+      prevHwIdRef.current = editingHomework.id;
+      lastSyncedHwRef.current = serialized;
+      return;
+    }
+    if (serialized === lastSyncedHwRef.current) return;
+    const timer = setTimeout(() => {
+      lastSyncedHwRef.current = serialized;
+      updateHomework(editingHomework.id, payload);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, [editingHomework, editingHomeworkQuestions, updateHomework]);
+
+  // Debounced auto-save for Published Exam & Questions editing modal
+  useEffect(() => {
+    if (!editingExam) {
+      prevExamIdRef.current = null;
+      lastSyncedExamRef.current = '';
+      return;
+    }
+    const payload = { ...editingExam, questions: editingExamQuestions };
+    const serialized = JSON.stringify(payload);
+    if (prevExamIdRef.current !== editingExam.id) {
+      prevExamIdRef.current = editingExam.id;
+      lastSyncedExamRef.current = serialized;
+      return;
+    }
+    if (serialized === lastSyncedExamRef.current) return;
+    const timer = setTimeout(() => {
+      lastSyncedExamRef.current = serialized;
+      updateExam(editingExam.id, payload);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, [editingExam, editingExamQuestions, updateExam]);
+
+  // Debounced auto-save for Published File editing modal
+  useEffect(() => {
+    if (!editingFile) {
+      prevFileIdRef.current = null;
+      lastSyncedFileRef.current = '';
+      return;
+    }
+    const serialized = JSON.stringify(editingFile);
+    if (prevFileIdRef.current !== editingFile.id) {
+      prevFileIdRef.current = editingFile.id;
+      lastSyncedFileRef.current = serialized;
+      return;
+    }
+    if (serialized === lastSyncedFileRef.current) return;
+    const timer = setTimeout(() => {
+      lastSyncedFileRef.current = serialized;
+      updateFile(editingFile.id, editingFile);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, [editingFile, updateFile]);
+
+  if (!isAdminPanelOpen) return null;
 
   // Real Video Upload & Duration Detection (reports exact duration, MB, speed, remaining time)
   const handleSelectVideoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1509,8 +1664,21 @@ export const AdminPanelModal: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>مزامنة مباشرة: Supabase (profiles, courses, documents, assignments)</span>
+              {isAutoSaving ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
+                  <span>جاري الحفظ التلقائي في Supabase...</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>
+                    {lastAutoSavedAt
+                      ? 'تم الحفظ التلقائي الفوري (Supabase ⚡)'
+                      : 'مزامنة مباشرة: Supabase (profiles, courses, documents, assignments)'}
+                  </span>
+                </>
+              )}
             </span>
 
             <button
@@ -2803,26 +2971,39 @@ export const AdminPanelModal: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Chat Typography Size Controller */}
-                    <div className="flex items-center gap-1.5 bg-[#050811] px-2.5 py-1 rounded-xl border border-slate-700/60 shadow-sm">
-                      <span className="text-[10px] text-slate-300 font-semibold">حجم الخط:</span>
+                    {/* Chat Typography Size Controller + Emergency AI Reset Button */}
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
-                        onClick={() => setChatFontSize((prev) => Math.max(12, prev - 1))}
-                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
-                        title="تصغير خط المحادثة"
+                        onClick={handleEmergencyResetAi}
+                        disabled={isResettingAi}
+                        className="px-2.5 py-1 rounded-xl bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/50 text-amber-300 font-bold text-[11px] flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
+                        title="إعادة ضبط طوارئ لاتصال Gemini ومسح الذاكرة المؤقتة"
                       >
-                        A-
+                        <RotateCcw className={`w-3.5 h-3.5 ${isResettingAi ? 'animate-spin' : ''}`} />
+                        <span>{isResettingAi ? 'جاري إعادة الضبط...' : 'إعادة ضبط AI'}</span>
                       </button>
-                      <span className="text-xs font-mono font-bold text-amber-300 px-1">{chatFontSize}px</span>
-                      <button
-                        type="button"
-                        onClick={() => setChatFontSize((prev) => Math.min(22, prev + 1))}
-                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
-                        title="تكبير خط المحادثة"
-                      >
-                        A+
-                      </button>
+
+                      <div className="flex items-center gap-1.5 bg-[#050811] px-2.5 py-1 rounded-xl border border-slate-700/60 shadow-sm">
+                        <span className="text-[10px] text-slate-300 font-semibold">حجم الخط:</span>
+                        <button
+                          type="button"
+                          onClick={() => setChatFontSize((prev) => Math.max(12, prev - 1))}
+                          className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
+                          title="تصغير خط المحادثة"
+                        >
+                          A-
+                        </button>
+                        <span className="text-xs font-mono font-bold text-amber-300 px-1">{chatFontSize}px</span>
+                        <button
+                          type="button"
+                          onClick={() => setChatFontSize((prev) => Math.min(22, prev + 1))}
+                          className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
+                          title="تكبير خط المحادثة"
+                        >
+                          A+
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -3222,26 +3403,39 @@ export const AdminPanelModal: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Chat Typography Size Controller */}
-                    <div className="flex items-center gap-1.5 bg-[#050811] px-2.5 py-1 rounded-xl border border-slate-700/60 shadow-sm">
-                      <span className="text-[10px] text-slate-300 font-semibold">حجم الخط:</span>
+                    {/* Chat Typography Size Controller + Emergency AI Reset Button */}
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
-                        onClick={() => setChatFontSize((prev) => Math.max(12, prev - 1))}
-                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
-                        title="تصغير خط المحادثة"
+                        onClick={handleEmergencyResetAi}
+                        disabled={isResettingAi}
+                        className="px-2.5 py-1 rounded-xl bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/50 text-amber-300 font-bold text-[11px] flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
+                        title="إعادة ضبط طوارئ لاتصال Gemini ومسح الذاكرة المؤقتة"
                       >
-                        A-
+                        <RotateCcw className={`w-3.5 h-3.5 ${isResettingAi ? 'animate-spin' : ''}`} />
+                        <span>{isResettingAi ? 'جاري إعادة الضبط...' : 'إعادة ضبط AI'}</span>
                       </button>
-                      <span className="text-xs font-mono font-bold text-amber-300 px-1">{chatFontSize}px</span>
-                      <button
-                        type="button"
-                        onClick={() => setChatFontSize((prev) => Math.min(22, prev + 1))}
-                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
-                        title="تكبير خط المحادثة"
-                      >
-                        A+
-                      </button>
+
+                      <div className="flex items-center gap-1.5 bg-[#050811] px-2.5 py-1 rounded-xl border border-slate-700/60 shadow-sm">
+                        <span className="text-[10px] text-slate-300 font-semibold">حجم الخط:</span>
+                        <button
+                          type="button"
+                          onClick={() => setChatFontSize((prev) => Math.max(12, prev - 1))}
+                          className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
+                          title="تصغير خط المحادثة"
+                        >
+                          A-
+                        </button>
+                        <span className="text-xs font-mono font-bold text-amber-300 px-1">{chatFontSize}px</span>
+                        <button
+                          type="button"
+                          onClick={() => setChatFontSize((prev) => Math.min(22, prev + 1))}
+                          className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs cursor-pointer transition-colors"
+                          title="تكبير خط المحادثة"
+                        >
+                          A+
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -5633,8 +5827,8 @@ export const AdminPanelModal: React.FC = () => {
                     <Palette className="w-4 h-4 text-cyan-400" />
                     <span>تخصيص مظهر وتنسيق وألوان المنصة بالكامل</span>
                   </h3>
-                  <span className="text-[11px] text-cyan-400 bg-cyan-950/60 px-2.5 py-0.5 rounded-full border border-cyan-800/40">
-                    تخصيص مباشر
+                  <span className="text-[11px] text-emerald-300 bg-emerald-950/60 px-2.5 py-0.5 rounded-full border border-emerald-700/40 font-bold">
+                    ✓ حفظ تلقائي فوري في Supabase
                   </span>
                 </div>
 
@@ -5648,9 +5842,12 @@ export const AdminPanelModal: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          setDraftSettings((prev) => ({ ...prev, themeMode: 'dark' }));
+                          const next = { ...draftSettings, themeMode: 'dark' as const };
+                          setDraftSettings(next);
+                          updateSettings(next);
                           document.documentElement.classList.remove('light');
                           document.documentElement.classList.add('dark');
+                          showNotice('🌙 تم التبديل للوضع الداكن وحفظ الإعداد تلقائياً');
                         }}
                         className={`py-2 px-2 text-xs font-bold rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-1.5 ${
                           draftSettings.themeMode === 'dark'
@@ -5664,9 +5861,12 @@ export const AdminPanelModal: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          setDraftSettings((prev) => ({ ...prev, themeMode: 'light' }));
+                          const next = { ...draftSettings, themeMode: 'light' as const };
+                          setDraftSettings(next);
+                          updateSettings(next);
                           document.documentElement.classList.remove('dark');
                           document.documentElement.classList.add('light');
+                          showNotice('☀️ تم التبديل للوضع الفاتح وحفظ الإعداد تلقائياً');
                         }}
                         className={`py-2 px-2 text-xs font-bold rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-1.5 ${
                           draftSettings.themeMode === 'light'
@@ -5680,7 +5880,9 @@ export const AdminPanelModal: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          setDraftSettings((prev) => ({ ...prev, themeMode: 'system' }));
+                          const next = { ...draftSettings, themeMode: 'system' as const };
+                          setDraftSettings(next);
+                          updateSettings(next);
                           const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
                           if (sysDark) {
                             document.documentElement.classList.remove('light');
@@ -5689,6 +5891,7 @@ export const AdminPanelModal: React.FC = () => {
                             document.documentElement.classList.remove('dark');
                             document.documentElement.classList.add('light');
                           }
+                          showNotice('💻 تم التبديل لوضع النظام وحفظ الإعداد تلقائياً');
                         }}
                         className={`py-2 px-2 text-xs font-bold rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-1.5 ${
                           draftSettings.themeMode === 'system'
@@ -5711,7 +5914,9 @@ export const AdminPanelModal: React.FC = () => {
                       value={draftSettings.fontFamily}
                       onChange={(e) => {
                         const newFont = e.target.value as any;
-                        setDraftSettings((prev) => ({ ...prev, fontFamily: newFont }));
+                        const next = { ...draftSettings, fontFamily: newFont };
+                        setDraftSettings(next);
+                        updateSettings(next);
                         document.body.style.fontFamily = `'${newFont}', sans-serif`;
                       }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
@@ -5741,12 +5946,14 @@ export const AdminPanelModal: React.FC = () => {
                           key={c.id}
                           type="button"
                           onClick={() => {
-                            setDraftSettings((prev) => ({ ...prev, primaryColor: c.id as any }));
+                            const next = { ...draftSettings, primaryColor: c.id as any };
+                            setDraftSettings(next);
+                            updateSettings(next);
                             document.documentElement.setAttribute('data-color', c.id);
                           }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 border transition-all cursor-pointer ${
                             draftSettings.primaryColor === c.id
-                              ? 'border-white text-white shadow-md scale-105 bg-slate-800'
+                              ? 'border-cyan-400 text-white shadow-md scale-105 bg-cyan-600'
                               : 'border-slate-800 text-slate-400 hover:text-white bg-[#050811]'
                           }`}
                         >
@@ -5764,9 +5971,11 @@ export const AdminPanelModal: React.FC = () => {
                     </label>
                     <select
                       value={draftSettings.layoutRadius}
-                      onChange={(e) =>
-                        setDraftSettings((prev) => ({ ...prev, layoutRadius: e.target.value as any }))
-                      }
+                      onChange={(e) => {
+                        const next = { ...draftSettings, layoutRadius: e.target.value as any };
+                        setDraftSettings(next);
+                        updateSettings(next);
+                      }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                     >
                       <option value="rounded-2xl">عصري مستدير (Rounded 2xl)</option>
@@ -5776,15 +5985,15 @@ export const AdminPanelModal: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Explicit Save & Reload Button Required by User */}
+                {/* Instant Auto-Save & Manual Sync Confirmation */}
                 <div className="pt-5 border-t border-cyan-900/40 flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-right">
                     <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-cyan-400" />
-                      <span>حفظ الإعدادات وتحديث الموقع</span>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <span>تم تفعيل الحفظ التلقائي الفوري للمظهر</span>
                     </h4>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      اضغط على زر الحفظ أدناه لاعتماد خيارات المظهر وإعادة تشغيل المنصة فورياً.
+                      كل تغيير في المظهر أو اللون أو الخط يُحفظ تلقائياً وفورياً في قاعدة البيانات بدون إعادة تحميل الصفحة.
                     </p>
                   </div>
 
@@ -5794,25 +6003,20 @@ export const AdminPanelModal: React.FC = () => {
                     onClick={() => {
                       setIsApplyingTheme(true);
                       updateSettings(draftSettings);
-                      try {
-                        localStorage.setItem('amr_chem_settings', JSON.stringify(draftSettings));
-                      } catch (e) {}
-                      showNotice('تم حفظ المظهر بنجاح! جاري تحديث الموقع...');
-                      setTimeout(() => {
-                        window.location.reload();
-                      }, 500);
+                      showNotice('✅ تم تأكيد ومزامنة كافة إعدادات المظهر في Supabase فوراً!');
+                      setTimeout(() => setIsApplyingTheme(false), 450);
                     }}
                     className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-lg shadow-cyan-600/30 cursor-pointer flex items-center justify-center gap-2"
                   >
                     {isApplyingTheme ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin text-white" />
-                        <span>جاري حفظ المظهر وتحديث الموقع...</span>
+                        <span>جاري المزامنة الفورية...</span>
                       </>
                     ) : (
                       <>
                         <Save className="w-4 h-4" />
-                        <span>حفظ المظهر وتحديث الموقع</span>
+                        <span>تأكيد حفظ المظهر في السحابة</span>
                       </>
                     )}
                   </button>
@@ -5822,7 +6026,7 @@ export const AdminPanelModal: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 12: TEACHER PROFILE (مستر عمرو السيد) - CLOUD FIRESTORE SYNC */}
+          {/* TAB 12: TEACHER PROFILE (مستر عمرو السيد) - INSTANT SUPABASE SYNC */}
           {activeTab === 'teacher_profile' && (
             <div className="space-y-6 animate-fade-in">
               <form onSubmit={handleSaveTeacherProfile} className="bg-[#080d1b] border border-cyan-800/40 rounded-2xl p-5 space-y-4 shadow-xl">
@@ -5831,8 +6035,8 @@ export const AdminPanelModal: React.FC = () => {
                     <UserCheck className="w-5 h-5 text-cyan-400" />
                     <span>ملف مستر عمرو السيد الشخصي وقاعدة البيانات السحابية 👨‍🏫</span>
                   </h3>
-                  <span className="text-[11px] text-cyan-400 bg-cyan-950/80 px-2.5 py-0.5 rounded-full border border-cyan-800/40 font-bold">
-                    مزامنة دائمة في Cloud Firestore
+                  <span className="text-[11px] text-emerald-300 bg-emerald-950/80 px-2.5 py-0.5 rounded-full border border-emerald-700/40 font-bold">
+                    ✓ حفظ تلقائي فوري في Supabase
                   </span>
                 </div>
 
@@ -5843,7 +6047,7 @@ export const AdminPanelModal: React.FC = () => {
                       type="text"
                       required
                       value={profName}
-                      onChange={(e) => setProfName(e.target.value)}
+                      onChange={(e) => { profileDirtyRef.current = true; setProfName(e.target.value); }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
                   </div>
@@ -5853,7 +6057,7 @@ export const AdminPanelModal: React.FC = () => {
                     <input
                       type="text"
                       value={profTitle}
-                      onChange={(e) => setProfTitle(e.target.value)}
+                      onChange={(e) => { profileDirtyRef.current = true; setProfTitle(e.target.value); }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
                   </div>
@@ -5864,7 +6068,7 @@ export const AdminPanelModal: React.FC = () => {
                       type="text"
                       required
                       value={profPhone}
-                      onChange={(e) => setProfPhone(e.target.value)}
+                      onChange={(e) => { profileDirtyRef.current = true; setProfPhone(e.target.value); }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono text-left"
                     />
                   </div>
@@ -5874,7 +6078,7 @@ export const AdminPanelModal: React.FC = () => {
                     <input
                       type="text"
                       value={profWhatsapp}
-                      onChange={(e) => setProfWhatsapp(e.target.value)}
+                      onChange={(e) => { profileDirtyRef.current = true; setProfWhatsapp(e.target.value); }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono text-left"
                     />
                   </div>
@@ -5884,7 +6088,7 @@ export const AdminPanelModal: React.FC = () => {
                     <input
                       type="email"
                       value={profEmail}
-                      onChange={(e) => setProfEmail(e.target.value)}
+                      onChange={(e) => { profileDirtyRef.current = true; setProfEmail(e.target.value); }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono text-left"
                     />
                   </div>
@@ -5894,7 +6098,7 @@ export const AdminPanelModal: React.FC = () => {
                     <input
                       type="text"
                       value={profOffice}
-                      onChange={(e) => setProfOffice(e.target.value)}
+                      onChange={(e) => { profileDirtyRef.current = true; setProfOffice(e.target.value); }}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
                   </div>
@@ -5905,7 +6109,7 @@ export const AdminPanelModal: React.FC = () => {
                   <textarea
                     rows={3}
                     value={profBio}
-                    onChange={(e) => setProfBio(e.target.value)}
+                    onChange={(e) => { profileDirtyRef.current = true; setProfBio(e.target.value); }}
                     className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                   />
                 </div>
@@ -5915,7 +6119,7 @@ export const AdminPanelModal: React.FC = () => {
                   <textarea
                     rows={2}
                     value={profAnnouncement}
-                    onChange={(e) => setProfAnnouncement(e.target.value)}
+                    onChange={(e) => { profileDirtyRef.current = true; setProfAnnouncement(e.target.value); }}
                     className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                   />
                 </div>
@@ -6069,17 +6273,22 @@ export const AdminPanelModal: React.FC = () => {
       {editingLecture && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in">
           <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
+            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-cyan-400" />
                 <span>تعديل المحاضرة المنشورة: {editingLecture.title}</span>
               </h3>
-              <button
-                onClick={() => setEditingLecture(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-block text-[10px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/40 px-2 py-0.5 rounded-full">
+                  ✓ حفظ تلقائي فوري في Supabase
+                </span>
+                <button
+                  onClick={() => setEditingLecture(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="space-y-3 text-xs">
@@ -6189,17 +6398,22 @@ export const AdminPanelModal: React.FC = () => {
       {editingHomework && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-fade-in">
           <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[94vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
+            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-amber-400" />
                 <span>تعديل الواجب والشيت المنشور: {editingHomework.title}</span>
               </h3>
-              <button
-                onClick={() => setEditingHomework(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-block text-[10px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/40 px-2 py-0.5 rounded-full">
+                  ✓ حفظ تلقائي فوري في Supabase
+                </span>
+                <button
+                  onClick={() => setEditingHomework(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -6278,17 +6492,22 @@ export const AdminPanelModal: React.FC = () => {
       {editingExam && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-fade-in">
           <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[94vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
+            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-cyan-400" />
                 <span>تعديل الامتحان المنشور: {editingExam.title}</span>
               </h3>
-              <button
-                onClick={() => setEditingExam(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-block text-[10px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/40 px-2 py-0.5 rounded-full">
+                  ✓ حفظ تلقائي فوري في Supabase
+                </span>
+                <button
+                  onClick={() => setEditingExam(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
@@ -6377,17 +6596,22 @@ export const AdminPanelModal: React.FC = () => {
       {editingFile && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in">
           <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
+            <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-emerald-400" />
                 <span>تعديل المذكرة أو الملف: {editingFile.title}</span>
               </h3>
-              <button
-                onClick={() => setEditingFile(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-block text-[10px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/40 px-2 py-0.5 rounded-full">
+                  ✓ حفظ تلقائي فوري في Supabase
+                </span>
+                <button
+                  onClick={() => setEditingFile(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="space-y-3 text-xs">

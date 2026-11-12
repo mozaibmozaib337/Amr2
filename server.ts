@@ -847,6 +847,61 @@ app.get('/api/ai-health', async (req, res) => {
   });
 });
 
+let aiResetCounter = 0;
+let lastAiResetAt = '';
+
+// AI Emergency Reset Endpoint (Re-initializes client session cleanly and runs live model recovery probe)
+app.post('/api/ai-reset', async (_req, res) => {
+  aiResetCounter += 1;
+  lastAiResetAt = new Date().toISOString();
+
+  // Short stabilization delay to clear any burst/socket pressure
+  await waitMs(350);
+
+  const client = getGeminiClient();
+  if (!client) {
+    return res.status(503).json({
+      configured: false,
+      healthy: false,
+      resetCount: aiResetCounter,
+      resetAt: lastAiResetAt,
+      primaryModel: GEMINI_PRIMARY_MODEL,
+      fallbackModel: GEMINI_FALLBACK_MODEL,
+      errorCode: 'MISSING_KEY',
+      message: 'تم تصفير الذاكرة المؤقتة، لكن مفتاح GEMINI_API_KEY غير مضبوط حالياً في Settings > Secrets.',
+    });
+  }
+
+  const probe = await generateContentWithRetry(client, {
+    contents: 'Reply with only: OK',
+    timeoutMs: 15000,
+  });
+
+  if (probe.text) {
+    return res.json({
+      configured: true,
+      healthy: true,
+      resetCount: aiResetCounter,
+      resetAt: lastAiResetAt,
+      primaryModel: GEMINI_PRIMARY_MODEL,
+      fallbackModel: GEMINI_FALLBACK_MODEL,
+      activeModel: probe.modelUsed,
+      message: `⚡ تمت إعادة ضبط الطوارئ وتفعيل الاتصال بنموذج ${probe.modelUsed} بنجاح!`,
+    });
+  }
+
+  return res.status(probe.lastError?.httpStatus || 503).json({
+    configured: true,
+    healthy: false,
+    resetCount: aiResetCounter,
+    resetAt: lastAiResetAt,
+    primaryModel: GEMINI_PRIMARY_MODEL,
+    fallbackModel: GEMINI_FALLBACK_MODEL,
+    errorCode: probe.lastError?.code || 'UNKNOWN',
+    message: probe.lastError?.userMessage || 'تمت إعادة التعيين ولكن لم يستجب الخادم بعد؛ يرجى المحاولة بعد ثوانٍ.',
+  });
+});
+
 // Helper to extract or parse educational questions tailored to any subject (Chemistry, Biology, Science, Primary to Secondary)
 function extractSmartQuestions(grade: string = 'sec3', instructions: string = '', rawText: string = ''): any {
   const combined = `${instructions} ${rawText}`.toLowerCase();
