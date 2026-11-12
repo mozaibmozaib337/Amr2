@@ -103,11 +103,34 @@ export function resetActiveSupabaseCredentials(): void {
   }
 }
 
+/**
+ * Ensures any string ID is formatted as a valid RFC-4122 UUID for Supabase uuid primary keys.
+ */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function ensureUuid(rawId: string): string {
+  const s = String(rawId || '').trim();
+  if (UUID_REGEX.test(s)) return s;
+
+  // Deterministic UUID v4-shaped hash from arbitrary string ID
+  let h1 = 0xdeadbeef ^ s.length;
+  let h2 = 0x41c6ce57 ^ s.length;
+  let h3 = 0x1b873593 ^ s.length;
+  let h4 = 0x85ebca6b ^ s.length;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+    h3 = Math.imul(h3 ^ ch, 2246822519);
+    h4 = Math.imul(h4 ^ ch, 3266489917);
+  }
+  const hex = (n: number) => (n >>> 0).toString(16).padStart(8, '0');
+  const full = hex(h1) + hex(h2) + hex(h3) + hex(h4);
+  return `${full.slice(0, 8)}-${full.slice(8, 12)}-4${full.slice(13, 16)}-a${full.slice(17, 20)}-${full.slice(20, 32)}`;
+}
 
 /**
- * Sanitize data for Supabase / JSON storage:
- * - strips undefined values
- * - handles nested objects & arrays
+ * Sanitize data for JSON / localStorage
  */
 function sanitizeForSupabase(obj: any): any {
   if (obj === undefined) return null;
@@ -148,21 +171,201 @@ function setLocalCache<T>(collectionName: string, items: T[]): void {
   }
 }
 
+/**
+ * Maps internal app collection names to actual existing Supabase PostgreSQL tables.
+ * Non-mapped collections remain strictly in localStorage without hitting missing tables.
+ */
 const TABLE_MAPPINGS: Record<string, string[]> = {
-  lectures: ['courses', 'lectures'],
-  courses: ['lectures', 'courses'],
-  files: ['documents', 'files'],
-  documents: ['files', 'documents'],
-  registered_accounts: ['profiles', 'registered_accounts'],
-  profiles: ['registered_accounts', 'profiles'],
-  homeworks: ['assignments', 'homeworks'],
-  exams: ['assignments', 'exams'],
-  assignments: ['homeworks', 'exams', 'assignments'],
+  lectures: ['courses'],
+  courses: ['courses'],
+  files: ['documents'],
+  documents: ['documents'],
+  registered_accounts: ['profiles'],
+  profiles: ['profiles'],
+  homeworks: ['assignments'],
+  exams: ['assignments'],
+  assignments: ['assignments'],
+  payment_requests: ['payment_requests'],
 };
 
 /**
+ * Maps app domain object to the exact PostgreSQL columns of the target Supabase table,
+ * preventing PGRST204 (unknown column) and 22P02 (invalid uuid) errors.
+ */
+function mapPayloadForTable(tbl: string, collectionName: string, id: string, data: any): Record<string, any> {
+  const validId = ensureUuid(id);
+
+  if (tbl === 'courses') {
+    return {
+      id: validId,
+      title: String(data.title || ''),
+      description: String(data.description || ''),
+      price: Number(data.price ?? 0),
+      grade: String(data.grade || 'sec3'),
+      video_url: String(data.videoUrl || data.video_url || ''),
+      provider: data.provider || 'youtube',
+      external_id: data.external_id || null,
+      original_url: data.original_url || data.videoUrl || data.video_url || null,
+    };
+  }
+
+  if (tbl === 'documents') {
+    return {
+      id: validId,
+      title: String(data.title || ''),
+      grade: String(data.grade || 'sec3'),
+      file_url: String(data.fileUrl || data.file_url || ''),
+      provider: data.provider || 'drive',
+      external_id: data.external_id || null,
+      original_url: data.original_url || data.fileUrl || data.file_url || null,
+    };
+  }
+
+  if (tbl === 'assignments') {
+    return {
+      id: validId,
+      title: String(data.title || ''),
+      grade: String(data.grade || 'sec3'),
+      type: collectionName === 'exams' ? 'exam' : 'homework',
+    };
+  }
+
+  if (tbl === 'profiles') {
+    return {
+      id: validId,
+      grade: String(data.grade || 'sec3'),
+    };
+  }
+
+  if (tbl === 'payment_requests') {
+    return {
+      id: validId,
+      user_id: data.user_id || data.studentId ? ensureUuid(String(data.user_id || data.studentId)) : null,
+      status: String(data.status || 'pending'),
+    };
+  }
+
+  return { id: validId, ...data };
+}
+
+/**
+ * Maps partial updates to exact PostgreSQL columns for the target Supabase table.
+ */
+function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
+  const out: Record<string, any> = {};
+  if (tbl === 'courses') {
+    if (partial.title !== undefined) out.title = String(partial.title);
+    if (partial.description !== undefined) out.description = String(partial.description);
+    if (partial.price !== undefined) out.price = Number(partial.price);
+    if (partial.grade !== undefined) out.grade = String(partial.grade);
+    if (partial.videoUrl !== undefined || partial.video_url !== undefined) {
+      out.video_url = String(partial.videoUrl ?? partial.video_url);
+    }
+    if (partial.provider !== undefined) out.provider = partial.provider;
+    if (partial.external_id !== undefined) out.external_id = partial.external_id;
+    if (partial.original_url !== undefined) out.original_url = partial.original_url;
+    return out;
+  }
+
+  if (tbl === 'documents') {
+    if (partial.title !== undefined) out.title = String(partial.title);
+    if (partial.grade !== undefined) out.grade = String(partial.grade);
+    if (partial.fileUrl !== undefined || partial.file_url !== undefined) {
+      out.file_url = String(partial.fileUrl ?? partial.file_url);
+    }
+    if (partial.provider !== undefined) out.provider = partial.provider;
+    if (partial.external_id !== undefined) out.external_id = partial.external_id;
+    if (partial.original_url !== undefined) out.original_url = partial.original_url;
+    return out;
+  }
+
+  if (tbl === 'assignments') {
+    if (partial.title !== undefined) out.title = String(partial.title);
+    if (partial.grade !== undefined) out.grade = String(partial.grade);
+    return out;
+  }
+
+  if (tbl === 'profiles') {
+    if (partial.grade !== undefined) out.grade = String(partial.grade);
+    return out;
+  }
+
+  if (tbl === 'payment_requests') {
+    if (partial.status !== undefined) out.status = String(partial.status);
+    return out;
+  }
+
+  return partial;
+}
+
+/**
+ * Converts a Supabase snake_case row back into the app's camelCase structure.
+ */
+function mapRowFromTable(tbl: string, row: any): any {
+  if (!row || typeof row !== 'object') return row;
+
+  if (tbl === 'courses') {
+    const extId = row.external_id || undefined;
+    const rawCandidate = String(row.video_url || row.videoUrl || row.original_url || '');
+    const isDrive = row.provider === 'drive' || /drive\.google\.com|drive\.usercontent\.google\.com/i.test(rawCandidate);
+    const driveIdMatch = rawCandidate.match(/(?:\/d\/|id=)([a-zA-Z0-9_-]{10,})/i);
+    const resolvedDriveId = extId || (driveIdMatch ? driveIdMatch[1] : undefined);
+    const videoUrl = isDrive && resolvedDriveId
+      ? `https://drive.google.com/file/d/${resolvedDriveId}/preview`
+      : row.video_url ||
+        row.videoUrl ||
+        (extId
+          ? `https://www.youtube-nocookie.com/embed/${extId}?controls=0&rel=0&modestbranding=1&disablekb=1&fs=0&iv_load_policy=3&playsinline=1&cc_load_policy=0&hl=ar`
+          : '');
+
+    return {
+      id: String(row.id),
+      title: row.title || 'محاضرة كيمياء',
+      description: row.description || '',
+      chapterTitle: row.chapterTitle || row.chapter_title || 'الباب الأول',
+      grade: row.grade || 'sec3',
+      durationMinutes: Number(row.durationMinutes ?? row.duration_minutes ?? 60),
+      videoUrl,
+      videoFileName: extId ? (isDrive ? `drive_${extId}.mp4` : `youtube_${extId}.mp4`) : 'lecture.mp4',
+      videoFileSize: row.provider === 'drive' || isDrive ? 'Google Drive HD' : row.provider === 'youtube' ? 'YouTube HD' : undefined,
+      price: Number(row.price ?? 0),
+      isFree: Number(row.price ?? 0) === 0,
+      dateAdded: row.created_at ? String(row.created_at).split('T')[0] : new Date().toISOString().split('T')[0],
+      provider: row.provider || (isDrive ? 'drive' : extId ? 'youtube' : 'other'),
+      external_id: resolvedDriveId || extId,
+      original_url: row.original_url || videoUrl,
+    };
+  }
+
+  if (tbl === 'documents') {
+    const extId = row.external_id || undefined;
+    const fileUrl =
+      row.file_url ||
+      row.fileUrl ||
+      (extId ? `https://drive.google.com/file/d/${extId}/preview` : '');
+
+    return {
+      id: String(row.id),
+      title: row.title || 'مذكرة كيمياء',
+      category: row.category || 'مذكرات الشرح',
+      grade: row.grade || 'sec3',
+      fileUrl,
+      fileName: row.file_name || `${row.title || 'document'}.pdf`,
+      fileType: row.file_type || 'pdf',
+      sizeMb: Number(row.size_mb ?? 5.0),
+      description: row.description || 'مذكرة كيمياء معتمدة',
+      dateAdded: row.created_at ? String(row.created_at).split('T')[0] : new Date().toISOString().split('T')[0],
+      provider: row.provider || (extId ? 'drive' : 'other'),
+      external_id: extId,
+      original_url: row.original_url || fileUrl,
+    };
+  }
+
+  return row;
+}
+
+/**
  * Real-time listener using Supabase postgres_changes with instant local cache fallback
- * Supports dual table aliases: profiles, courses, documents, assignments
  */
 export function subscribeToCollection<T>(
   collectionName: string,
@@ -180,9 +383,15 @@ export function subscribeToCollection<T>(
     setLocalCache(collectionName, initialSeed);
   }
 
-  const candidateTables = TABLE_MAPPINGS[collectionName] || [collectionName];
+  const candidateTables = TABLE_MAPPINGS[collectionName];
+  if (!candidateTables || candidateTables.length === 0) {
+    // Local-only collection; do not query nonexistent Supabase tables
+    return () => {
+      isMounted = false;
+    };
+  }
 
-  // 2. Fetch fresh data from Supabase asynchronously (checks primary table and standard aliases)
+  // 2. Fetch fresh data from Supabase asynchronously
   const fetchFromSupabase = async () => {
     try {
       const supabase = getSupabase();
@@ -192,9 +401,14 @@ export function subscribeToCollection<T>(
 
       for (const tbl of candidateTables) {
         try {
-          const { data, error } = await supabase.from(tbl).select('*');
+          let query = supabase.from(tbl).select('*');
+          if (tbl === 'assignments') {
+            const targetType = collectionName === 'exams' ? 'exam' : 'homework';
+            query = query.eq('type', targetType);
+          }
+          const { data, error } = await query;
           if (!error && data && data.length > 0) {
-            foundData = data;
+            foundData = data.map((r) => mapRowFromTable(tbl, r));
             break;
           }
         } catch {
@@ -207,21 +421,8 @@ export function subscribeToCollection<T>(
       if (foundData && foundData.length > 0) {
         onUpdate(foundData as unknown as T[]);
         setLocalCache(collectionName, foundData as unknown as T[]);
-      } else if (initialSeed && initialSeed.length > 0 && (!cached || cached.length === 0)) {
-        // Automatic initial seed to Supabase if table is new and empty
-        try {
-          const sanitizedSeed = initialSeed.map((item: any) => ({
-            id: String(item.id || item.code || Math.random().toString(36).slice(2)),
-            ...sanitizeForSupabase(item),
-          }));
-          for (const tbl of candidateTables) {
-            await supabase.from(tbl).upsert(sanitizedSeed, { onConflict: 'id' });
-          }
-        } catch {
-          // Table schema might be custom, continue smoothly
-        }
       }
-    } catch (err) {
+    } catch {
       console.log(`[Supabase] Sync notice for ${collectionName}`);
     }
   };
@@ -235,7 +436,7 @@ export function subscribeToCollection<T>(
     if (supabase) {
       candidateTables.forEach((tbl) => {
         const chan = supabase
-          .channel(`public:${tbl}`)
+          .channel(`public:${tbl}:${collectionName}`)
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: tbl },
@@ -253,7 +454,6 @@ export function subscribeToCollection<T>(
     console.warn(`[Supabase] Realtime channel setup notice for ${collectionName}:`, channelErr);
   }
 
-  // Unsubscribe cleanup
   return () => {
     isMounted = false;
     channels.forEach((ch) => {
@@ -267,21 +467,20 @@ export function subscribeToCollection<T>(
 
 /**
  * Save or overwrite a document by ID in Supabase
- * Mirrors to both standard table (e.g. courses, documents, assignments, profiles) and legacy table
  */
 export async function saveDocument(
   collectionName: string,
   id: string,
   data: any
 ): Promise<{ success: boolean; error?: any; errorMessage?: string }> {
-  const cleanId = String(id);
+  const cleanId = ensureUuid(String(id));
   const cleanData = sanitizeForSupabase(data);
 
   // 1. Update local cache immediately
   try {
     const existing = getLocalCache<any>(collectionName) || [];
-    const idx = existing.findIndex((item) => String(item.id || item.code) === cleanId);
-    const itemWithId = { ...cleanData, id: cleanId };
+    const idx = existing.findIndex((item) => String(item.id || item.code) === String(id) || String(item.id) === cleanId);
+    const itemWithId = { ...cleanData, id: String(id) };
     let updatedList;
     if (idx >= 0) {
       updatedList = [...existing];
@@ -292,20 +491,21 @@ export async function saveDocument(
     setLocalCache(collectionName, updatedList);
   } catch {}
 
-  // 2. Persist to Supabase across all candidate table aliases
-  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
+  // 2. Persist to Supabase only if collection maps to an actual Supabase table
+  const tables = TABLE_MAPPINGS[collectionName];
+  if (!tables || tables.length === 0) {
+    return { success: true };
+  }
+
   let lastError: any = null;
   let hasSuccess = false;
 
   try {
     const supabase = getSupabase();
     if (supabase) {
-      const payload: any = { id: cleanId, ...cleanData };
-      if (collectionName === 'homeworks') payload.type = 'homework';
-      if (collectionName === 'exams') payload.type = 'exam';
-
       for (const tbl of tables) {
         try {
+          const payload = mapPayloadForTable(tbl, collectionName, cleanId, cleanData);
           const { error } = await supabase.from(tbl).upsert(payload, { onConflict: 'id' });
           if (error) {
             lastError = error;
@@ -334,13 +534,13 @@ export async function saveDocument(
  * Update partial fields of a document in Supabase
  */
 export async function updateDocument(collectionName: string, id: string, partial: any): Promise<void> {
-  const cleanId = String(id);
+  const cleanId = ensureUuid(String(id));
   const cleanPartial = sanitizeForSupabase(partial);
 
   // 1. Update local cache immediately
   try {
     const existing = getLocalCache<any>(collectionName) || [];
-    const idx = existing.findIndex((item) => String(item.id || item.code) === cleanId);
+    const idx = existing.findIndex((item) => String(item.id || item.code) === String(id) || String(item.id) === cleanId);
     if (idx >= 0) {
       const updatedList = [...existing];
       updatedList[idx] = { ...updatedList[idx], ...cleanPartial };
@@ -348,14 +548,18 @@ export async function updateDocument(collectionName: string, id: string, partial
     }
   } catch {}
 
-  // 2. Persist to Supabase across all candidate table aliases
-  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
+  const tables = TABLE_MAPPINGS[collectionName];
+  if (!tables || tables.length === 0) return;
+
   try {
     const supabase = getSupabase();
     if (supabase) {
       for (const tbl of tables) {
         try {
-          await supabase.from(tbl).update(cleanPartial).eq('id', cleanId);
+          const mappedPartial = mapPartialForTable(tbl, cleanPartial);
+          if (Object.keys(mappedPartial).length > 0) {
+            await supabase.from(tbl).update(mappedPartial).eq('id', cleanId);
+          }
         } catch {}
       }
     }
@@ -368,17 +572,18 @@ export async function updateDocument(collectionName: string, id: string, partial
  * Delete a document by ID from Supabase
  */
 export async function deleteDocument(collectionName: string, id: string): Promise<void> {
-  const cleanId = String(id);
+  const cleanId = ensureUuid(String(id));
 
   // 1. Remove from local cache immediately
   try {
     const existing = getLocalCache<any>(collectionName) || [];
-    const updatedList = existing.filter((item) => String(item.id || item.code) !== cleanId);
+    const updatedList = existing.filter((item) => String(item.id || item.code) !== String(id) && String(item.id) !== cleanId);
     setLocalCache(collectionName, updatedList);
   } catch {}
 
-  // 2. Remove from Supabase across all candidate table aliases
-  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
+  const tables = TABLE_MAPPINGS[collectionName];
+  if (!tables || tables.length === 0) return;
+
   try {
     const supabase = getSupabase();
     if (supabase) {
@@ -412,14 +617,16 @@ export async function bulkSaveDocuments(collectionName: string, items: any[]): P
     setLocalCache(collectionName, Array.from(existingMap.values()));
   } catch {}
 
-  // 2. Persist to Supabase across all candidate table aliases
-  const tables = TABLE_MAPPINGS[collectionName] || [collectionName];
+  const tables = TABLE_MAPPINGS[collectionName];
+  if (!tables || tables.length === 0) return;
+
   try {
     const supabase = getSupabase();
     if (supabase) {
       for (const tbl of tables) {
         try {
-          await supabase.from(tbl).upsert(cleanItems, { onConflict: 'id' });
+          const mappedItems = cleanItems.map((it) => mapPayloadForTable(tbl, collectionName, it.id, it));
+          await supabase.from(tbl).upsert(mappedItems, { onConflict: 'id' });
         } catch {}
       }
     }

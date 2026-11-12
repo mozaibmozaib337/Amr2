@@ -19,7 +19,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
-import { parseYouTubeUrl } from '../utils/linkParser';
+import { parseVideoUrl } from '../utils/linkParser';
 
 export const LecturesSection: React.FC = () => {
   const {
@@ -50,16 +50,16 @@ export const LecturesSection: React.FC = () => {
 
   const handleVerifyVideoLink = () => {
     if (!quickUrl.trim()) {
-      setFormNotice({ type: 'error', message: '⚠️ برجاء كتابة رابط فيديو يوتيوب أولاً.' });
+      setFormNotice({ type: 'error', message: '⚠️ برجاء كتابة رابط فيديو يوتيوب أو جوجل درايف أولاً.' });
       return;
     }
     setFormNotice(null);
-    const parsed = parseYouTubeUrl(quickUrl);
+    const parsed = parseVideoUrl(quickUrl);
     if (!parsed.isValid) {
       setVerifiedId(null);
       setFormNotice({
         type: 'error',
-        message: '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب صحيح (watch?v= أو youtu.be/ أو /shorts/ أو /embed/).'
+        message: parsed.error || '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب أو جوجل درايف صالح.'
       });
       return;
     }
@@ -67,10 +67,17 @@ export const LecturesSection: React.FC = () => {
     setVerifiedId(parsed.id);
     setFormNotice({
       type: 'success',
-      message: `✅ تم التحقق من رابط يوتيوب بنجاح! معرّف الفيديو: (${parsed.id})`
+      message:
+        parsed.provider === 'drive'
+          ? `✅ تم التحقق من رابط Google Drive وتحويله للبث المباشر! معرّف الملف: (${parsed.id})`
+          : `✅ تم التحقق من رابط يوتيوب بنجاح! معرّف الفيديو: (${parsed.id})`
     });
     if (!lectureTitle.trim()) {
-      setLectureTitle(`محاضرة كيمياء - فيديو ${parsed.id}`);
+      setLectureTitle(
+        parsed.provider === 'drive'
+          ? `محاضرة كيمياء (Drive) - ${parsed.id.substring(0, 8)}`
+          : `محاضرة كيمياء - فيديو ${parsed.id}`
+      );
     }
   };
 
@@ -81,11 +88,11 @@ export const LecturesSection: React.FC = () => {
       return;
     }
 
-    const parsed = parseYouTubeUrl(quickUrl);
+    const parsed = parseVideoUrl(quickUrl);
     if (!parsed.isValid) {
       setFormNotice({
         type: 'error',
-        message: '⚠️ الرابط المدخل ليس رابط يوتيوب صالح (فقط YouTube مدعوم للفيديو).'
+        message: parsed.error || '⚠️ الرابط المدخل غير صالح (يدعم YouTube أو Google Drive فقط).'
       });
       return;
     }
@@ -101,11 +108,11 @@ export const LecturesSection: React.FC = () => {
         grade: activeGrade === 'all' ? 'sec3' : activeGrade,
         durationMinutes: Number(lectureDuration) || 60,
         videoUrl: parsed.embedUrl,
-        videoFileName: `youtube_${parsed.id}.mp4`,
-        videoFileSize: 'YouTube HD',
+        videoFileName: `${parsed.provider}_${parsed.id}.mp4`,
+        videoFileSize: parsed.provider === 'drive' ? 'Google Drive HD' : 'YouTube HD',
         price: isFreeLecture ? 0 : Number(lecturePrice) || 50,
         isFree: isFreeLecture,
-        provider: 'youtube',
+        provider: parsed.provider,
         external_id: parsed.id,
         original_url: quickUrl.trim(),
       });
@@ -279,10 +286,17 @@ export const LecturesSection: React.FC = () => {
                   </div>
 
                   <div className="flex items-start gap-2">
-                    <span className="text-[10px] font-bold px-2 py-0.5 mt-0.5 rounded bg-red-600/20 text-red-400 border border-red-500/30 flex items-center gap-1 shrink-0">
-                      <Play className="w-2.5 h-2.5 fill-current" />
-                      <span>YouTube</span>
-                    </span>
+                    {lec.provider === 'drive' || /drive\.google\.com|drive\.usercontent\.google\.com/i.test(lec.videoUrl || '') ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 mt-0.5 rounded bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 shrink-0">
+                        <Play className="w-2.5 h-2.5 fill-current" />
+                        <span>Drive</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2 py-0.5 mt-0.5 rounded bg-red-600/20 text-red-400 border border-red-500/30 flex items-center gap-1 shrink-0">
+                        <Play className="w-2.5 h-2.5 fill-current" />
+                        <span>YouTube</span>
+                      </span>
+                    )}
                     <h3 className="font-bold text-sm text-white group-hover:text-cyan-300 transition-colors line-clamp-2">
                       {lec.title}
                     </h3>
@@ -363,7 +377,7 @@ export const LecturesSection: React.FC = () => {
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
               <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
                 <Video className="w-5 h-5 text-cyan-400" />
-                <span>إضافة محاضرة برابط يوتيوب (فحص فوري)</span>
+                <span>إضافة محاضرة برابط YouTube أو Google Drive</span>
               </h3>
               <button
                 onClick={() => setShowQuickAddModal(false)}
@@ -391,14 +405,14 @@ export const LecturesSection: React.FC = () => {
             <form noValidate onSubmit={handleSubmitVerifiedLecture} className="space-y-3.5">
               <div className="space-y-1.5">
                 <label className="block text-xs font-bold text-slate-300">
-                  رابط يوتيوب (watch?v= أو youtu.be/ أو /shorts/ أو /embed/):
+                  رابط يوتيوب أو رابط فيديو جوجل درايف (/file/d/ID/view أو ?id=ID):
                 </label>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
                     value={quickUrl}
                     onChange={(e) => setQuickUrl(e.target.value)}
-                    placeholder="https://www.youtube.com/watch?v=..."
+                    placeholder="https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/.../view"
                     className="flex-1 bg-[#050811] border border-cyan-900/60 rounded-xl px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-cyan-400"
                     dir="ltr"
                   />

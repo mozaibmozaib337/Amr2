@@ -64,7 +64,7 @@ import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient } from '../utils/aiClientService';
 import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials } from '../services/supabaseService';
 import { Database, Link2 } from 'lucide-react';
-import { parseYouTubeUrl, parseDriveUrl } from '../utils/linkParser';
+import { parseYouTubeUrl, parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
 
 
 
@@ -1061,22 +1061,22 @@ export const AdminPanelModal: React.FC = () => {
     let external_id: string | undefined = undefined;
     let original_url: string | undefined = undefined;
 
-    // Check external YouTube link with pure regex
+    // Check external YouTube or Google Drive video link with pure regex
     if (finalVideoUrl && !videoFileObj) {
-      const parsed = parseYouTubeUrl(finalVideoUrl);
+      const parsed = parseVideoUrl(finalVideoUrl);
       if (!parsed.isValid) {
-        showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب صالح (watch?v= أو youtu.be/ أو /shorts/ أو /embed/).');
+        showNotice(parsed.error || '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب أو جوجل درايف صالح.');
         return;
       }
-      provider = 'youtube';
+      provider = parsed.provider;
       external_id = parsed.id;
       original_url = finalVideoUrl;
       finalVideoUrl = parsed.embedUrl;
-      finalFileSize = 'YouTube HD';
+      finalFileSize = parsed.provider === 'drive' ? 'Google Drive HD' : 'YouTube HD';
     }
 
     if (!finalVideoUrl && !videoFileObj) {
-      showNotice('يرجى اختيار ملف فيديو أو إدخال رابط يوتيوب صالح.');
+      showNotice('يرجى اختيار ملف فيديو أو إدخال رابط يوتيوب أو جوجل درايف صالح.');
       return;
     }
 
@@ -1087,7 +1087,11 @@ export const AdminPanelModal: React.FC = () => {
         grade: videoGrade,
         durationMinutes: finalDuration,
         videoUrl: finalVideoUrl || '',
-        videoFileName: videoFileObj?.name || (external_id ? `youtube_${external_id}.mp4` : 'video_lecture.mp4'),
+        videoFileName:
+          videoFileObj?.name ||
+          (external_id
+            ? `${provider === 'drive' ? 'drive' : 'youtube'}_${external_id}.mp4`
+            : 'video_lecture.mp4'),
         videoFileSize: finalFileSize,
         description: videoDesc,
         price: isVideoFree ? 0 : (Number(videoPrice) || 50),
@@ -2429,10 +2433,10 @@ export const AdminPanelModal: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <HardDrive className="w-4 h-4 text-cyan-400" />
-                    <span>إضافة فيديو تعليمي مباشرة من جهازك أو برابط YouTube</span>
+                    <span>إضافة فيديو تعليمي مباشرة من جهازك أو برابط YouTube / Google Drive</span>
                   </h3>
                   <span className="text-[11px] text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
-                    حد أقصى للرفع المباشر 50MB · روابط يوتيوب غير محدودة
+                    حد أقصى للرفع المباشر 50MB · روابط يوتيوب وجوجل درايف غير محدودة
                   </span>
                 </div>
 
@@ -2449,7 +2453,7 @@ export const AdminPanelModal: React.FC = () => {
                     {videoFileObj ? `تم اختيار: ${videoFileObj.name}` : 'اضغط لاختيار ملف الفيديو من جهازك (بحد أقصى 50 ميجابايت)'}
                   </p>
                   <p className="text-[11px] text-slate-400">
-                    للملفات الأكبر من 50 ميجا، يُرجى استخدام خيار رابط يوتيوب المخصص بالأسفل
+                    للملفات الأكبر من 50 ميجا، يُرجى استخدام خيار رابط يوتيوب أو جوجل درايف بالأسفل
                   </p>
                 </div>
 
@@ -2459,10 +2463,10 @@ export const AdminPanelModal: React.FC = () => {
                   videoDurationFormatted ? `⏱️ مدة الفيديو المقروءة بدقة من الملف: ${videoDurationFormatted}` : undefined
                 )}
 
-                {/* Alternative: External Video URL */}
+                {/* Alternative: External Video URL (YouTube or Google Drive) */}
                 <div className="p-3.5 bg-[#050811] border border-cyan-950 rounded-xl space-y-2">
                   <label className="block text-xs font-semibold text-slate-300">
-                    أو إضافة برابط يوتيوب (watch?v= أو youtu.be/ أو /shorts/ أو /embed/):
+                    أو إضافة برابط يوتيوب (watch?v= / youtu.be/ / shorts) أو رابط فيديو Google Drive (/file/d/ID/view أو ?id=ID):
                   </label>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <input
@@ -2472,7 +2476,7 @@ export const AdminPanelModal: React.FC = () => {
                         setVideoFileUrl(e.target.value);
                         if (e.target.value) setVideoFileObj(null);
                       }}
-                      placeholder="https://www.youtube.com/watch?v=..."
+                      placeholder="https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/.../view"
                       className="flex-1 bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                     />
                     {videoFileUrl && !videoFileUrl.startsWith('/uploads/') && (
@@ -2480,19 +2484,27 @@ export const AdminPanelModal: React.FC = () => {
                         type="button"
                         onClick={() => {
                           if (!videoFileUrl.trim()) {
-                            showNotice('يرجى إدخال رابط يوتيوب أولاً.');
+                            showNotice('يرجى إدخال رابط يوتيوب أو جوجل درايف أولاً.');
                             return;
                           }
-                          const parsed = parseYouTubeUrl(videoFileUrl);
+                          const parsed = parseVideoUrl(videoFileUrl);
                           if (!parsed.isValid) {
-                            showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب صالح (watch?v= أو youtu.be/ أو /shorts/ أو /embed/).');
+                            showNotice(parsed.error || '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب أو جوجل درايف صالح.');
                             return;
                           }
                           setVideoFileUrl(parsed.embedUrl);
                           if (!videoTitle) {
-                            setVideoTitle(`محاضرة كيمياء - فيديو ${parsed.id}`);
+                            setVideoTitle(
+                              parsed.provider === 'drive'
+                                ? `محاضرة كيمياء (Drive) - ${parsed.id.substring(0, 8)}`
+                                : `محاضرة كيمياء - فيديو ${parsed.id}`
+                            );
                           }
-                          showNotice(`✅ تم التحقق من رابط يوتيوب بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`);
+                          showNotice(
+                            parsed.provider === 'drive'
+                              ? `✅ تم تحويل رابط Google Drive للبث المباشر بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`
+                              : `✅ تم التحقق من رابط يوتيوب بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`
+                          );
                         }}
                         className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
                       >
@@ -2502,7 +2514,7 @@ export const AdminPanelModal: React.FC = () => {
                     )}
                   </div>
                   <p className="text-[10px] text-cyan-400">
-                    🔒 مشغل يوتيوب مخصص: يُعرض حصرياً داخل المنصة مع إخفاء كامل لشعارات يوتيوب وأزرار المشاركة وعناصر التحكم الخارجية.
+                    🔒 مشغل المنصة الخاص: يدعم روابط YouTube وروابط فيديو Google Drive (بعد ضبط الصلاحية إلى "أي شخص لديه الرابط") ويعرضها بملء الشاشة بدون شعارات أو نوافذ خارجية.
                   </p>
                 </div>
 

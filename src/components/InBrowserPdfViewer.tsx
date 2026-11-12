@@ -43,11 +43,53 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
   const [iframeLoaded, setIframeLoaded] = useState<boolean>(false);
   const [loadTimedOut, setLoadTimedOut] = useState<boolean>(false);
   const [iframeKey, setIframeKey] = useState<number>(0);
+  const [isPdfFullscreen, setIsPdfFullscreen] = useState<boolean>(false);
+  const [showFsControls, setShowFsControls] = useState<boolean>(true);
 
+  const viewerRootRef = useRef<HTMLDivElement | null>(null);
+  const fsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const continuousContainerRef = useRef<HTMLDivElement | null>(null);
   const pdfDocRef = useRef<any>(null);
   const renderTaskRef = useRef<any>(null);
+
+  const triggerFsControlsTimer = () => {
+    setShowFsControls(true);
+    if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
+    if (document.fullscreenElement) {
+      fsHideTimerRef.current = setTimeout(() => {
+        setShowFsControls(false);
+      }, 3000);
+    }
+  };
+
+  useEffect(() => {
+    const onFsChange = () => {
+      const active = !!document.fullscreenElement;
+      setIsPdfFullscreen(active);
+      if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
+      if (active) {
+        setShowFsControls(false);
+      } else {
+        setShowFsControls(true);
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
+    };
+  }, []);
+
+  const togglePdfFullscreen = () => {
+    const el = viewerRootRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
 
   // Helper to convert base64 data to binary Uint8Array
   const dataUrlToUint8Array = (dataUrl: string): Uint8Array => {
@@ -262,8 +304,31 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
     : unwrappedFileUrl;
 
   return (
-    <div className="w-full h-full flex flex-col bg-[#070c18] rounded-xl overflow-hidden text-slate-100">
-      {/* PDF Action Toolbar */}
+    <div
+      ref={viewerRootRef}
+      onClick={() => {
+        if (isPdfFullscreen) {
+          setShowFsControls((prev) => {
+            const next = !prev;
+            if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
+            if (next) {
+              fsHideTimerRef.current = setTimeout(() => setShowFsControls(false), 3000);
+            }
+            return next;
+          });
+        }
+      }}
+      onPointerMove={(e) => {
+        if (isPdfFullscreen && e.pointerType === 'mouse') {
+          triggerFsControlsTimer();
+        }
+      }}
+      className={`w-full h-full flex flex-col bg-[#070c18] overflow-hidden text-slate-100 relative ${
+        isPdfFullscreen ? 'rounded-none w-screen h-[100dvh]' : 'rounded-xl'
+      }`}
+    >
+      {/* PDF Action Toolbar (Completely hidden in Fullscreen mode) */}
+      {!isPdfFullscreen && (
       <div className="p-2 sm:p-3 bg-[#0a1122] border-b border-cyan-900/40 flex flex-wrap items-center justify-between gap-2.5 text-xs">
         {/* Engine Switcher */}
         <div className="flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-xl border border-cyan-900/40">
@@ -377,8 +442,17 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
           </div>
         )}
 
-        {/* In-Platform Download */}
+        {/* In-Platform Download & Fullscreen */}
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={togglePdfFullscreen}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-cyan-700/50 text-cyan-300 hover:text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+            title="ملء الشاشة"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+            <span>ملء الشاشة</span>
+          </button>
           <a
             href={fileUrl}
             download={fileName || 'chemistry-document.pdf'}
@@ -390,9 +464,58 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
           </a>
         </div>
       </div>
+      )}
+
+      {/* Floating Controls in Fullscreen Mode (Auto-hides after 3s, toggleable by tap) */}
+      {isPdfFullscreen && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 rounded-2xl bg-black/85 backdrop-blur-md border border-cyan-500/40 shadow-2xl transition-opacity duration-300 text-xs ${
+            showFsControls ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+          }`}
+        >
+          {viewEngine === 'canvas' && numPages > 0 && viewMode === 'single' && (
+            <>
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="p-1.5 rounded-lg text-slate-200 hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+                title="الصفحة السابقة"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <span className="font-mono font-bold text-cyan-300 px-1">
+                {currentPage} / {numPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
+                disabled={currentPage >= numPages}
+                className="p-1.5 rounded-lg text-slate-200 hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+                title="الصفحة التالية"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="w-[1px] h-4 bg-slate-700 mx-1" />
+            </>
+          )}
+          <button
+            type="button"
+            onClick={togglePdfFullscreen}
+            className="flex items-center gap-1.5 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold cursor-pointer"
+            title="الخروج من الشاشة الكاملة"
+          >
+            <Minimize2 className="w-3.5 h-3.5" />
+            <span>خروج من ملء الشاشة</span>
+          </button>
+        </div>
+      )}
 
       {/* PDF Viewport Area */}
-      <div className="flex-1 bg-[#050811] overflow-auto p-2 sm:p-4 flex flex-col items-center justify-start relative select-none">
+      <div
+        className={`flex-1 bg-[#050811] overflow-auto flex flex-col items-center justify-start relative select-none ${
+          isPdfFullscreen ? 'p-0' : 'p-2 sm:p-4'
+        }`}
+      >
         {isLoading && viewEngine === 'canvas' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#050811]/90 z-20 space-y-3">
             <Loader2 className="w-10 h-10 animate-spin text-cyan-400" />
@@ -402,7 +525,11 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
 
         {/* Native Browser Embed (Foolproof, renders on 100% of browsers inside platform) */}
         {viewEngine === 'native' && (
-          <div className="w-full h-full rounded-xl overflow-hidden bg-white shadow-2xl relative select-none">
+          <div
+            className={`w-full h-full overflow-hidden bg-white shadow-2xl relative select-none ${
+              isPdfFullscreen ? 'rounded-none' : 'rounded-xl'
+            }`}
+          >
             {/* Pop-out icon blocker mask for Google Drive (~70x70px top-right corner) */}
             {isGoogleDrive && (
               <div
@@ -485,35 +612,49 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
           className="fixed inset-0 z-70 bg-black/95 backdrop-blur-md flex flex-col animate-fade-in"
           onContextMenu={(e) => e.preventDefault()}
         >
-          {/* Header Bar */}
-          <div className="bg-[#070d1c] border-b border-cyan-800/80 px-4 py-3 flex items-center justify-between text-white shadow-xl">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                <Eye className="w-5 h-5" />
+          {/* Header Bar (Hidden in Fullscreen mode) */}
+          {!isPdfFullscreen && (
+            <div className="bg-[#070d1c] border-b border-cyan-800/80 px-4 py-3 flex items-center justify-between text-white shadow-xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                  <Eye className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
+                    <span>{title || fileName || 'قراءة المستند بالتصفح المباشر'}</span>
+                    <span className="text-[10px] bg-cyan-950 text-cyan-400 px-2 py-0.5 rounded-full border border-cyan-800">
+                      صفحة مدمجة بالمنصة
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    عرض وقراءة المستند بنظام المتصفح المباشر مع الحماية من الخروج أو كشف المصدر
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
-                  <span>{title || fileName || 'قراءة المستند بالتصفح المباشر'}</span>
-                  <span className="text-[10px] bg-cyan-950 text-cyan-400 px-2 py-0.5 rounded-full border border-cyan-800">
-                    صفحة مدمجة بالمنصة
-                  </span>
-                </h3>
-                <p className="text-[11px] text-slate-400">
-                  عرض وقراءة المستند بنظام المتصفح المباشر مع الحماية من الخروج أو كشف المصدر
-                </p>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={togglePdfFullscreen}
+                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 hover:text-white border border-cyan-700/60 transition-all cursor-pointer flex items-center gap-1.5"
+                  title="ملء الشاشة"
+                >
+                  <Maximize2 className="w-4 h-4" />
+                  <span className="text-xs font-bold hidden sm:inline">ملء الشاشة</span>
+                </button>
+
+                {/* Close Button X */}
+                <button
+                  onClick={() => setIsBrowserPageOpen(false)}
+                  className="p-2 rounded-xl bg-red-950/80 hover:bg-red-800 text-red-200 hover:text-white border border-red-700 transition-all cursor-pointer flex items-center gap-2 shadow-lg"
+                  title="إغلاق والرجوع للمنصة (X)"
+                >
+                  <X className="w-5 h-5" />
+                  <span className="text-xs font-bold hidden sm:inline">إغلاق الصفحة ✕</span>
+                </button>
               </div>
             </div>
-
-            {/* Close Button X */}
-            <button
-              onClick={() => setIsBrowserPageOpen(false)}
-              className="p-2 rounded-xl bg-red-950/80 hover:bg-red-800 text-red-200 hover:text-white border border-red-700 transition-all cursor-pointer flex items-center gap-2 shadow-lg"
-              title="إغلاق والرجوع للمنصة (X)"
-            >
-              <X className="w-5 h-5" />
-              <span className="text-xs font-bold hidden sm:inline">إغلاق الصفحة ✕</span>
-            </button>
-          </div>
+          )}
 
           {/* Full Screen Reader Viewport */}
           <div className="flex-1 bg-white relative overflow-hidden">

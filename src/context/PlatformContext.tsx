@@ -1614,11 +1614,22 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setIsAdminPanelOpen(false);
   };
 
+  const generateUuid = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
   // Add / Update / Delete Lecture
   const addLecture = async (lec: Omit<Lecture, 'id' | 'dateAdded'>) => {
     const newLec: Lecture = {
       ...lec,
-      id: 'lec_' + Date.now(),
+      id: generateUuid(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setLectures((prev) => [newLec, ...prev]);
@@ -1642,7 +1653,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const addHomework = (hw: Omit<Homework, 'id' | 'dateAdded'>) => {
     const newHw: Homework = {
       ...hw,
-      id: 'hw_' + Date.now(),
+      id: generateUuid(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setHomeworks((prev) => [newHw, ...prev]);
@@ -1663,7 +1674,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const addFile = async (file: Omit<FileDocument, 'id' | 'dateAdded'>) => {
     const newFile: FileDocument = {
       ...file,
-      id: 'file_' + Date.now(),
+      id: generateUuid(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setFiles((prev) => [newFile, ...prev]);
@@ -1687,7 +1698,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const addExam = (exam: Omit<Exam, 'id' | 'dateAdded'>) => {
     const newExam: Exam = {
       ...exam,
-      id: 'exam_' + Date.now(),
+      id: generateUuid(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
     setExams((prev) => [newExam, ...prev]);
