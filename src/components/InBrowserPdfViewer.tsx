@@ -40,7 +40,9 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
   const [viewEngine, setViewEngine] = useState<'canvas' | 'native'>('canvas');
   const [viewMode, setViewMode] = useState<'single' | 'continuous'>('single');
   const [isBrowserPageOpen, setIsBrowserPageOpen] = useState<boolean>(false);
-
+  const [iframeLoaded, setIframeLoaded] = useState<boolean>(false);
+  const [loadTimedOut, setLoadTimedOut] = useState<boolean>(false);
+  const [iframeKey, setIframeKey] = useState<number>(0);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const continuousContainerRef = useRef<HTMLDivElement | null>(null);
@@ -58,6 +60,20 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
     return bytes;
   };
 
+  // Google Drive 10s timeout timer
+  useEffect(() => {
+    const isDrive = fileUrl.includes('drive.google.com') || fileUrl.includes('docs.google.com');
+    if (isDrive) {
+      setViewEngine('native');
+      setIframeLoaded(false);
+      setLoadTimedOut(false);
+      const timer = setTimeout(() => {
+        setLoadTimedOut(true);
+      }, 10000); // 10 seconds timeout
+      return () => clearTimeout(timer);
+    }
+  }, [fileUrl, iframeKey]);
+
   // Load PDF Document with PDF.js
   useEffect(() => {
     let isCancelled = false;
@@ -66,8 +82,8 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
     setCurrentPage(1);
 
     const loadPdf = async () => {
-      // 1. If Telegram post: bypass PDF.js structure parse and immediately use isolated native view
-      if (fileUrl.includes('t.me') || fileUrl.includes('telegram.me')) {
+      // 1. If Google Drive or Telegram post: immediately use isolated native view
+      if (fileUrl.includes('drive.google.com') || fileUrl.includes('docs.google.com') || fileUrl.includes('t.me') || fileUrl.includes('telegram.me')) {
         if (!isCancelled) {
           setViewEngine('native');
           setIsLoading(false);
@@ -387,32 +403,57 @@ export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
         {/* Native Browser Embed (Foolproof, renders on 100% of browsers inside platform) */}
         {viewEngine === 'native' && (
           <div className="w-full h-full rounded-xl overflow-hidden bg-white shadow-2xl relative select-none">
-            {/* Pop-out icon blocker mask for Google Drive */}
+            {/* Pop-out icon blocker mask for Google Drive (~70x70px top-right corner) */}
             {isGoogleDrive && (
-              <>
-                <div
-                  className="absolute top-0 right-0 w-28 h-20 z-30 bg-transparent cursor-default pointer-events-auto"
-                  title=""
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onContextMenu={(e) => e.preventDefault()}
-                />
-                <div
-                  className="absolute top-0 left-0 w-24 h-20 z-30 bg-transparent cursor-default pointer-events-auto"
-                  title=""
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onContextMenu={(e) => e.preventDefault()}
-                />
-              </>
+              <div
+                className="absolute top-0 right-0 w-[72px] h-[72px] z-40 bg-transparent cursor-default pointer-events-auto"
+                title=""
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onContextMenu={(e) => e.preventDefault()}
+              />
             )}
+
+            {/* Skeleton Loader while iframe is loading */}
+            {!iframeLoaded && (
+              <div className="absolute inset-0 z-20 bg-[#060b18] flex flex-col items-center justify-center p-6 space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-cyan-950 border border-cyan-800/60 flex items-center justify-center text-cyan-400">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                </div>
+                <div className="text-center space-y-1">
+                  <p className="text-xs font-bold text-white">جاري تحميل وعرض المستند من Google Drive...</p>
+                  <p className="text-[11px] text-slate-400">يتم الفتح داخل عارض المنصة المدمج الآمن بدون تنزيل أو روابط خارجية</p>
+                </div>
+
+                {/* 10s Timeout Message & Retry Button */}
+                {loadTimedOut && (
+                  <div className="mt-2 p-3 bg-amber-950/80 border border-amber-600/50 rounded-xl text-center space-y-2 max-w-sm animate-fade-in">
+                    <p className="text-[11px] text-amber-200 font-semibold">
+                      ⚠️ الملف كبير أو أن اتصال السيرفر استغرق وقتاً أطول. جرّب لاحقاً أو أعد تحميل الصفحة.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIframeLoaded(false);
+                        setLoadTimedOut(false);
+                        setIframeKey((k) => k + 1);
+                      }}
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      إعادة المحاولة ↻
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <iframe
+              key={iframeKey}
               src={safeEmbedUrl}
               title={title || fileName || 'عرض مستند PDF'}
+              onLoad={() => setIframeLoaded(true)}
               className="w-full h-full border-0"
               sandbox="allow-scripts allow-same-origin allow-forms"
             />

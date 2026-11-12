@@ -104,6 +104,14 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > 50 * 1024 * 1024) {
+      setErrorMessage(
+        `⚠️ حجم الملف (${(file.size / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى المسموح للرفع المباشر (50 ميجابايت). يُرجى استخدام خيار الإضافة بالرابط (YouTube للفيديوهات أو Google Drive للمذكرات) لتوفير المساحة وتشغيل سريع وفوري.`
+      );
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setCurrentFileName(file.name);
     setIsUploading(true);
     setErrorMessage(null);

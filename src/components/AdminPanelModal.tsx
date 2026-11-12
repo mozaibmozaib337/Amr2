@@ -64,7 +64,7 @@ import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient } from '../utils/aiClientService';
 import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials } from '../services/supabaseService';
 import { Database, Link2 } from 'lucide-react';
-import { inspectAndFetchExternalVideo, inspectAndFetchExternalDocument, verifyMediaLinkHeaders } from '../utils/externalMediaInspector';
+import { parseYouTubeUrl, parseDriveUrl } from '../utils/linkParser';
 
 
 
@@ -397,6 +397,15 @@ export const AdminPanelModal: React.FC = () => {
   const handleSelectVideoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (file.size > 50 * 1024 * 1024) {
+      showNotice(
+        `⚠️ حجم ملف الفيديو (${(file.size / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى للرفع المباشر (50 ميجابايت). يُرجى استخدام خيار الإضافة بالرابط (YouTube) لتشغيل مجاني وسريع وبدون أي قيود.`
+      );
+      e.target.value = '';
+      return;
+    }
+
     setVideoFileObj(file);
     if (!videoTitle) {
       setVideoTitle(file.name.replace(/\.[^/.]+$/, ''));
@@ -470,6 +479,15 @@ export const AdminPanelModal: React.FC = () => {
   const handleSelectDocFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (file.size > 50 * 1024 * 1024) {
+      showNotice(
+        `⚠️ حجم المستند (${(file.size / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى للرفع المباشر (50 ميجابايت). يُرجى استخدام خيار الإضافة برابط Google Drive لعرض آمن وفوري.`
+      );
+      e.target.value = '';
+      return;
+    }
+
     setDocFileObj(file);
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'xlsx' || ext === 'xls') setDocFileType('xls');
@@ -1027,55 +1045,76 @@ export const AdminPanelModal: React.FC = () => {
   const handleAddVideo = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!videoTitle.trim()) {
-      showNotice('يرجى إدخال عنوان المحاضرة واختيار الفيديو من جهازك أو وضع رابط صالح.');
+      showNotice('يرجى إدخال عنوان المحاضرة واختيار الفيديو من جهازك أو وضع رابط يوتيوب صالح.');
       return;
     }
 
-    let finalVideoUrl = videoFileUrl;
+    if (videoFileObj && videoFileObj.size > 50 * 1024 * 1024) {
+      showNotice('⚠️ حجم الملف أكبر من 50 ميجابايت (الحد الأقصى للرفع المباشر). يُرجى استخدام خيار الإضافة بالرابط (YouTube) لتشغيل سلس وبدون استهلاك للمساحة.');
+      return;
+    }
+
+    let finalVideoUrl = videoFileUrl.trim();
     let finalDuration = Number(videoDuration) || 60;
     let finalFileSize = videoFileObj ? `${(videoFileObj.size / (1024 * 1024)).toFixed(1)} MB` : undefined;
+    let provider: 'youtube' | 'drive' | 'local' | 'other' = videoFileObj ? 'local' : 'youtube';
+    let external_id: string | undefined = undefined;
+    let original_url: string | undefined = undefined;
 
-    // Real-time link verification check for external URLs before submission to Supabase
-    if (finalVideoUrl && !finalVideoUrl.startsWith('/uploads/') && !videoFileObj) {
-      showNotice('⏳ جاري التحقق من ترويسات الرابط والمدة بدقة قبل الإرسال إلى قاعدة البيانات...');
-      const check = await verifyMediaLinkHeaders(finalVideoUrl, 'video');
-      if (!check.isValid) {
-        showNotice(`⚠️ تنبيه: ${check.error || 'الرابط غير صالح'}`);
+    // Check external YouTube link with pure regex
+    if (finalVideoUrl && !videoFileObj) {
+      const parsed = parseYouTubeUrl(finalVideoUrl);
+      if (!parsed.isValid) {
+        showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب صالح (watch?v= أو youtu.be/ أو /shorts/ أو /embed/).');
         return;
       }
-      finalVideoUrl = check.sanitizedUrl;
-      if (check.durationSeconds && check.durationSeconds > 0) {
-        finalDuration = Math.max(1, Math.round(check.durationSeconds / 60));
-      }
-      if (check.contentLengthFormatted) {
-        finalFileSize = check.contentLengthFormatted;
-      }
+      provider = 'youtube';
+      external_id = parsed.id;
+      original_url = finalVideoUrl;
+      finalVideoUrl = parsed.embedUrl;
+      finalFileSize = 'YouTube HD';
     }
 
-    if (!finalVideoUrl) {
-      finalVideoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    if (!finalVideoUrl && !videoFileObj) {
+      showNotice('يرجى اختيار ملف فيديو أو إدخال رابط يوتيوب صالح.');
+      return;
     }
 
-    addLecture({
-      title: videoTitle,
-      chapterTitle: videoChapter || 'الباب الأول',
-      grade: videoGrade,
-      durationMinutes: finalDuration,
-      videoUrl: finalVideoUrl,
-      videoFileName: videoFileObj?.name || 'video_lecture.mp4',
-      videoFileSize: finalFileSize,
-      description: videoDesc,
-      price: isVideoFree ? 0 : (Number(videoPrice) || 50),
-      isFree: isVideoFree,
-    });
+    try {
+      const res = await addLecture({
+        title: videoTitle.trim(),
+        chapterTitle: videoChapter || 'الباب الأول',
+        grade: videoGrade,
+        durationMinutes: finalDuration,
+        videoUrl: finalVideoUrl || '',
+        videoFileName: videoFileObj?.name || (external_id ? `youtube_${external_id}.mp4` : 'video_lecture.mp4'),
+        videoFileSize: finalFileSize,
+        description: videoDesc,
+        price: isVideoFree ? 0 : (Number(videoPrice) || 50),
+        isFree: isVideoFree,
+        provider,
+        external_id,
+        original_url,
+      });
 
-    setVideoTitle('');
-    setVideoChapter('');
-    setVideoFileObj(null);
-    setVideoFileUrl('');
-    setVideoDesc('');
-    setIsVideoFree(false);
-    showNotice('تم التحقق من الرابط وإضافة المحاضرة بنجاح وحفظها الدائم في قاعدة البيانات!');
+      if (res && !res.success) {
+        const errorMsg = res.errorMessage || 'فشل الحفظ في قاعدة البيانات Supabase';
+        console.error('[AdminPanel Supabase AddLecture Error]:', res.error || errorMsg);
+        showNotice(`❌ خطأ Supabase: ${errorMsg}`);
+        return;
+      }
+
+      setVideoTitle('');
+      setVideoChapter('');
+      setVideoFileObj(null);
+      setVideoFileUrl('');
+      setVideoDesc('');
+      setIsVideoFree(false);
+      showNotice('⚡ تم حفظ المحاضرة بنجاح في قاعدة البيانات Supabase!');
+    } catch (err: any) {
+      console.error('[AdminPanel AddLecture Exception]:', err);
+      showNotice(`❌ خطأ غير متوقع: ${err?.message || err}`);
+    }
   };
 
   // Add Homework
@@ -1106,45 +1145,71 @@ export const AdminPanelModal: React.FC = () => {
   // Add File
   const handleAddFile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fileTitle.trim()) return;
+    if (!fileTitle.trim()) {
+      showNotice('يرجى إدخال عنوان المذكرة أو المستند.');
+      return;
+    }
 
-    let finalUrl = docFileUrl;
+    if (docFileObj && docFileObj.size > 50 * 1024 * 1024) {
+      showNotice('⚠️ حجم الملف أكبر من 50 ميجابايت (الحد الأقصى للرفع المباشر). يُرجى استخدام خيار الإضافة برابط Google Drive لعرض آمن وفوري.');
+      return;
+    }
+
+    let finalUrl = docFileUrl.trim();
     let finalSize = docFileObj ? Number((docFileObj.size / (1024 * 1024)).toFixed(2)) : 5.0;
+    let provider: 'youtube' | 'drive' | 'local' | 'other' = docFileObj ? 'local' : 'drive';
+    let external_id: string | undefined = undefined;
+    let original_url: string | undefined = undefined;
 
-    // Real-time header check before submitting document to Supabase
-    if (finalUrl && !finalUrl.startsWith('/uploads/') && !docFileObj) {
-      showNotice('⏳ جاري فحص الرابط وقراءة عدد الصفحات بدقة قبل الحفظ في قاعدة البيانات...');
-      const check = await verifyMediaLinkHeaders(finalUrl, 'document');
-      if (!check.isValid) {
-        showNotice(`⚠️ تنبيه: ${check.error || 'رابط المستند غير صالح'}`);
+    // Check external Google Drive link with pure regex
+    if (finalUrl && !docFileObj) {
+      const parsed = parseDriveUrl(finalUrl);
+      if (!parsed.isValid) {
+        showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط Google Drive صالح (/file/d/ID أو ?id=ID أو /open?id=ID).');
         return;
       }
-      finalUrl = check.sanitizedUrl;
-      if (check.pageCount) {
-        showNotice(`✅ تم التأكد من المستند: يتضمن ${check.pageCount} صفحة.`);
+      provider = 'drive';
+      external_id = parsed.id;
+      original_url = finalUrl;
+      finalUrl = parsed.previewUrl;
+    }
+
+    if (!finalUrl && !docFileObj) {
+      showNotice('يرجى اختيار ملف مذكرة أو إدخال رابط Google Drive صالح.');
+      return;
+    }
+
+    try {
+      const res = await addFile({
+        title: fileTitle.trim(),
+        category: fileCategory,
+        grade: fileGrade,
+        fileUrl: finalUrl || '',
+        fileName: docFileObj?.name || `${fileTitle.trim()}.pdf`,
+        fileType: docFileType,
+        sizeMb: finalSize,
+        description: fileDesc,
+        provider,
+        external_id,
+        original_url,
+      });
+
+      if (res && !res.success) {
+        const errorMsg = res.errorMessage || 'فشل الحفظ في قاعدة البيانات Supabase';
+        console.error('[AdminPanel Supabase AddFile Error]:', res.error || errorMsg);
+        showNotice(`❌ خطأ Supabase: ${errorMsg}`);
+        return;
       }
+
+      setFileTitle('');
+      setDocFileObj(null);
+      setDocFileUrl('');
+      setFileDesc('');
+      showNotice('⚡ تم حفظ المذكرة بنجاح في قاعدة البيانات Supabase!');
+    } catch (err: any) {
+      console.error('[AdminPanel AddFile Exception]:', err);
+      showNotice(`❌ خطأ غير متوقع: ${err?.message || err}`);
     }
-
-    if (!finalUrl) {
-      finalUrl = 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
-    }
-
-    addFile({
-      title: fileTitle,
-      category: fileCategory,
-      grade: fileGrade,
-      fileUrl: finalUrl,
-      fileName: docFileObj?.name || `${fileTitle}.pdf`,
-      fileType: docFileType,
-      sizeMb: finalSize,
-      description: fileDesc,
-    });
-
-    setFileTitle('');
-    setDocFileObj(null);
-    setDocFileUrl('');
-    setFileDesc('');
-    showNotice('تم التحقق من الرابط وإضافة وحفظ المستند بنجاح في قاعدة البيانات!');
   };
 
   // Add Exam (with bulk questions)
@@ -2360,14 +2425,14 @@ export const AdminPanelModal: React.FC = () => {
           {/* TAB 1: VIDEOS (UPLOAD FROM DEVICE DIRECTLY) */}
           {activeTab === 'videos' && (
             <div className="space-y-6">
-              <form onSubmit={handleAddVideo} className="bg-[#080d1b] border border-cyan-900/40 rounded-xl p-4 sm:p-5 space-y-4">
+              <form noValidate onSubmit={handleAddVideo} className="bg-[#080d1b] border border-cyan-900/40 rounded-xl p-4 sm:p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <HardDrive className="w-4 h-4 text-cyan-400" />
-                    <span>إضافة فيديو تعليمي مباشرة من ملفات جهازك</span>
+                    <span>إضافة فيديو تعليمي مباشرة من جهازك أو برابط YouTube</span>
                   </h3>
                   <span className="text-[11px] text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
-                    رفع ملف مباشر بدون روابط خارجية
+                    حد أقصى للرفع المباشر 50MB · روابط يوتيوب غير محدودة
                   </span>
                 </div>
 
@@ -2381,10 +2446,10 @@ export const AdminPanelModal: React.FC = () => {
                   />
                   <Video className="w-8 h-8 text-cyan-400 mx-auto" />
                   <p className="text-xs font-bold text-white">
-                    {videoFileObj ? `تم اختيار: ${videoFileObj.name}` : 'اضغط لاختيار ملف الفيديو من جهازك (MP4 / WebM / وغيرها)'}
+                    {videoFileObj ? `تم اختيار: ${videoFileObj.name}` : 'اضغط لاختيار ملف الفيديو من جهازك (بحد أقصى 50 ميجابايت)'}
                   </p>
                   <p className="text-[11px] text-slate-400">
-                    يدعم جميع صيغ الفيديوهات بحجم كامل وبدون الحاجة لرفعها على أي منصة خارجية
+                    للملفات الأكبر من 50 ميجا، يُرجى استخدام خيار رابط يوتيوب المخصص بالأسفل
                   </p>
                 </div>
 
@@ -2397,83 +2462,47 @@ export const AdminPanelModal: React.FC = () => {
                 {/* Alternative: External Video URL */}
                 <div className="p-3.5 bg-[#050811] border border-cyan-950 rounded-xl space-y-2">
                   <label className="block text-xs font-semibold text-slate-300">
-                    أو إدخال رابط فيديو خارجي (YouTube / Google Drive / Telegram تليجرام / رابط مباشر):
+                    أو إضافة برابط يوتيوب (watch?v= أو youtu.be/ أو /shorts/ أو /embed/):
                   </label>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <input
-                      type="url"
+                      type="text"
                       value={videoFileUrl.startsWith('/uploads/') ? '' : videoFileUrl}
                       onChange={(e) => {
                         setVideoFileUrl(e.target.value);
                         if (e.target.value) setVideoFileObj(null);
                       }}
-                      placeholder="مثال: https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/... أو https://t.me/..."
+                      placeholder="https://www.youtube.com/watch?v=..."
                       className="flex-1 bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                     />
                     {videoFileUrl && !videoFileUrl.startsWith('/uploads/') && (
                       <button
                         type="button"
-                        onClick={async () => {
-                          if (!videoFileUrl.trim()) return;
-                          setVideoUploadProgress({
-                            isUploading: true,
-                            progressPercent: 10,
-                            uploadedBytesFormatted: 'فحص الرابط',
-                            totalBytesFormatted: 'فحص البيانات',
-                            speedFormatted: 'بدء الاتصال',
-                            remainingTimeFormatted: 'جاري القراءة...',
-                            fileName: 'فيديو خارجي معزول',
-                            fileSizeFormatted: 'جاري الكشف...',
-                            statusText: '⏳ جاري فحص الرابط الخارجي وقراءة مدته بدقة وتجهيزه داخل المنصة...',
-                          });
-                          try {
-                            const res = await inspectAndFetchExternalVideo(videoFileUrl, (p) => {
-                              setVideoUploadProgress({
-                                isUploading: p.percent < 100,
-                                progressPercent: p.percent,
-                                uploadedBytesFormatted: p.loadedFormatted,
-                                totalBytesFormatted: p.totalFormatted,
-                                speedFormatted: p.speed,
-                                remainingTimeFormatted: p.remaining,
-                                fileName: 'فيديو معزول بدون شعارات',
-                                fileSizeFormatted: 'فيديو عالي الجودة',
-                                statusText: `جاري المعالجة: ${p.loadedFormatted} - ${p.remaining}`,
-                              });
-                            });
-                            setVideoFileUrl(res.publicUrl);
-                            if (res.durationSeconds > 0) {
-                              setVideoDuration(String(Math.max(1, Math.round(res.durationSeconds / 60))));
-                              setVideoDurationFormatted(res.durationFormatted);
-                            }
-                            if (!videoTitle && res.suggestedTitle) {
-                              setVideoTitle(res.suggestedTitle);
-                            }
-                            setVideoUploadProgress({
-                              isUploading: false,
-                              progressPercent: 100,
-                              uploadedBytesFormatted: res.fileSizeFormatted,
-                              totalBytesFormatted: res.fileSizeFormatted,
-                              speedFormatted: 'مكتمل',
-                              remainingTimeFormatted: '0 ثانية',
-                              fileName: res.suggestedTitle || 'فيديو معتمد',
-                              fileSizeFormatted: res.fileSizeFormatted,
-                              statusText: `✅ تم التحقق من الرابط بنجاح وقراءة المدة بدقة (${res.durationFormatted}) ودمجه داخل المشغل المعزول!`,
-                            });
-                            showNotice(`⚡ تم تأكيد الرابط وقراءة مدة الفيديو بدقة (${res.durationFormatted}) بنجاح!`);
-                          } catch (err: any) {
-                            setVideoUploadProgress(null);
-                            showNotice('⚠️ تعذر فحص الرابط، تم اعتماده مباشرة.');
+                        onClick={() => {
+                          if (!videoFileUrl.trim()) {
+                            showNotice('يرجى إدخال رابط يوتيوب أولاً.');
+                            return;
                           }
+                          const parsed = parseYouTubeUrl(videoFileUrl);
+                          if (!parsed.isValid) {
+                            showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب صالح (watch?v= أو youtu.be/ أو /shorts/ أو /embed/).');
+                            return;
+                          }
+                          setVideoFileUrl(parsed.embedUrl);
+                          if (!videoTitle) {
+                            setVideoTitle(`محاضرة كيمياء - فيديو ${parsed.id}`);
+                          }
+                          showNotice(`✅ تم التحقق من رابط يوتيوب بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`);
                         }}
                         className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
                       >
                         <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-                        <span>تأكيد وفحص الرابط تلقائياً ⚡</span>
+                        <span>تأكيد وفحص الرابط</span>
                       </button>
                     )}
                   </div>
                   <p className="text-[10px] text-cyan-400">
-                    🔒 مشغل معزول بالكامل (Custom White-Label): يُعرض حصرياً داخل المنصة مع حجب الإعلانات وشعارات المنصات الخارجية وحظر الخروج أو نسخ الروابط.
+                    🔒 مشغل يوتيوب مخصص: يُعرض حصرياً داخل المنصة مع إخفاء كامل لشعارات يوتيوب وأزرار المشاركة وعناصر التحكم الخارجية.
                   </p>
                 </div>
 
@@ -3459,12 +3488,15 @@ export const AdminPanelModal: React.FC = () => {
           {/* TAB 4: FILES (PDF, WORD, EXCEL DIRECT FROM DEVICE) */}
           {activeTab === 'files' && (
             <div className="space-y-6">
-              <form onSubmit={handleAddFile} className="bg-[#080d1b] border border-cyan-900/40 rounded-xl p-4 sm:p-5 space-y-4">
+              <form noValidate onSubmit={handleAddFile} className="bg-[#080d1b] border border-cyan-900/40 rounded-xl p-4 sm:p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <FolderOpen className="w-4 h-4 text-cyan-400" />
-                    <span>إضافة مستند أو مذكرة (PDF / Word / Excel / صور) من جهازك مباشرة</span>
+                    <span>إضافة مستند أو مذكرة من جهازك أو برابط Google Drive</span>
                   </h3>
+                  <span className="text-[11px] text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
+                    حد أقصى للرفع المباشر 50MB · روابط درايف غير محدودة
+                  </span>
                 </div>
 
                 {/* Local Doc File Picker */}
@@ -3477,10 +3509,10 @@ export const AdminPanelModal: React.FC = () => {
                   />
                   <FolderOpen className="w-8 h-8 text-cyan-400 mx-auto" />
                   <p className="text-xs font-bold text-white">
-                    {docFileObj ? `تم اختيار: ${docFileObj.name}` : 'اضغط لاختيار الملف من جهازك'}
+                    {docFileObj ? `تم اختيار: ${docFileObj.name}` : 'اضغط لاختيار الملف من جهازك (بحد أقصى 50 ميجابايت)'}
                   </p>
                   <p className="text-[11px] text-slate-400">
-                    يدعم فتح وقراءة ملفات PDF، وورد DOCX، إكسل XLSX، والصور مباشرة داخل المنصة
+                    للملفات والملازم الكبيرة، يُرجى استخدام خيار رابط Google Drive بالأسفل
                   </p>
                 </div>
 
@@ -3490,80 +3522,48 @@ export const AdminPanelModal: React.FC = () => {
                 {/* Alternative: External Document URL */}
                 <div className="p-3.5 bg-[#050811] border border-cyan-950 rounded-xl space-y-2">
                   <label className="block text-xs font-semibold text-slate-300">
-                    أو إدخال رابط مستند / مذكرة خارجي مباشر (Google Drive / Telegram / رابط مباشر):
+                    أو إضافة برابط Google Drive (/file/d/ID أو ?id=ID أو /open?id=ID):
                   </label>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <input
-                      type="url"
+                      type="text"
                       value={docFileUrl.startsWith('/uploads/') ? '' : docFileUrl}
                       onChange={(e) => {
                         setDocFileUrl(e.target.value);
                         if (e.target.value) setDocFileObj(null);
                       }}
-                      placeholder="https://... رابط جوجل درايف أو تليجرام أو ملف PDF مباشر"
+                      placeholder="https://drive.google.com/file/d/.../view"
                       className="flex-1 bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                     />
                     {docFileUrl && !docFileUrl.startsWith('/uploads/') && (
                       <button
                         type="button"
-                        onClick={async () => {
-                          if (!docFileUrl.trim()) return;
-                          setDocUploadProgress({
-                            isUploading: true,
-                            progressPercent: 15,
-                            uploadedBytesFormatted: 'فحص الرابط',
-                            totalBytesFormatted: 'فحص المستند',
-                            speedFormatted: 'بدء الاتصال',
-                            remainingTimeFormatted: 'جاري القراءة...',
-                            fileName: 'مستند خارجي',
-                            fileSizeFormatted: 'جاري الكشف...',
-                            statusText: '⏳ جاري فحص الرابط الخارجي وقراءة صفحات الملف بدقة عالية...',
-                          });
-                          try {
-                            const res = await inspectAndFetchExternalDocument(docFileUrl, (p) => {
-                              setDocUploadProgress({
-                                isUploading: p.percent < 100,
-                                progressPercent: p.percent,
-                                uploadedBytesFormatted: p.loadedFormatted,
-                                totalBytesFormatted: p.totalFormatted,
-                                speedFormatted: p.speed,
-                                remainingTimeFormatted: p.remaining,
-                                fileName: 'مستند معتمد',
-                                fileSizeFormatted: res.fileSizeFormatted || 'مستند عالي الجودة',
-                                statusText: `جاري المعالجة: ${p.loadedFormatted} - ${p.remaining}`,
-                              });
-                            });
-                            setDocFileUrl(res.publicUrl);
-                            setDocFileType(res.detectedType);
-                            if (!fileTitle && res.suggestedTitle) {
-                              setFileTitle(res.suggestedTitle);
-                            }
-                            setDocUploadProgress({
-                              isUploading: false,
-                              progressPercent: 100,
-                              uploadedBytesFormatted: res.fileSizeFormatted,
-                              totalBytesFormatted: res.fileSizeFormatted,
-                              speedFormatted: 'مكتمل',
-                              remainingTimeFormatted: '0 ثانية',
-                              fileName: res.suggestedTitle || 'مستند معتمد',
-                              fileSizeFormatted: res.fileSizeFormatted,
-                              statusText: `✅ تم التحقق من الرابط بنجاح وقراءة صفحات الملف بدقة (${res.pageCount} صفحة) وتجهيزه داخل العارض المدمج!`,
-                            });
-                            showNotice(`⚡ تم تأكيد الرابط وقراءة عدد الصفحات بدقة (${res.pageCount} صفحة) بنجاح!`);
-                          } catch (err: any) {
-                            setDocUploadProgress(null);
-                            showNotice('⚠️ تعذر فحص الرابط، تم اعتماده مباشرة.');
+                        onClick={() => {
+                          if (!docFileUrl.trim()) {
+                            showNotice('يرجى إدخال رابط Google Drive أولاً.');
+                            return;
                           }
+                          const parsed = parseDriveUrl(docFileUrl);
+                          if (!parsed.isValid) {
+                            showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط Google Drive صالح (/file/d/ID أو ?id=ID أو /open?id=ID).');
+                            return;
+                          }
+                          setDocFileUrl(parsed.previewUrl);
+                          setDocFileType('pdf');
+                          if (!fileTitle) {
+                            setFileTitle(`مذكرة كيمياء - ملف ${parsed.id.slice(0, 8)}`);
+                          }
+                          showNotice(`✅ تم التحقق من رابط Google Drive بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`);
                         }}
                         className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
                       >
                         <CheckCircle2 className="w-4 h-4 text-white" />
-                        <span>تأكيد وفحص الرابط وقراءة الصفحات ⚡</span>
+                        <span>تأكيد وفحص الرابط</span>
                       </button>
                     )}
                   </div>
                   <p className="text-[10px] text-cyan-400">
-                    🔒 عارض معزول بالكامل: تفتح الملفات وروابط درايف وتليجرام داخل المنصة فقط مع حجب أيقونة الخروج والتنزيل الخارجي.
+                    🔒 عارض معزول بالكامل: تفتح مستندات Google Drive داخل عارض المنصة المدمج فقط مع حجب أيقونة الخروج والتنزيل الخارجي.
                   </p>
                 </div>
 

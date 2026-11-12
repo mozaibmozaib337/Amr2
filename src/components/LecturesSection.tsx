@@ -19,7 +19,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
-import { LinkVerificationService, LinkMetadata } from '../utils/LinkVerificationService';
+import { parseYouTubeUrl } from '../utils/linkParser';
 
 export const LecturesSection: React.FC = () => {
   const {
@@ -39,64 +39,97 @@ export const LecturesSection: React.FC = () => {
   const [showQuickAddModal, setShowQuickAddModal] = useState(false);
   const [quickUrl, setQuickUrl] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
-  const [verificationResult, setVerificationResult] = useState<LinkMetadata | null>(null);
+  const [verifiedId, setVerifiedId] = useState<string | null>(null);
   const [lectureTitle, setLectureTitle] = useState('');
   const [lectureChapter, setLectureChapter] = useState('الباب الأول');
   const [lectureDuration, setLectureDuration] = useState('60');
   const [lecturePrice, setLecturePrice] = useState('50');
   const [isFreeLecture, setIsFreeLecture] = useState(false);
-  const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleVerifyVideoLink = async () => {
-    if (!quickUrl.trim()) return;
-    setIsVerifying(true);
+  const handleVerifyVideoLink = () => {
+    if (!quickUrl.trim()) {
+      setFormNotice({ type: 'error', message: '⚠️ برجاء كتابة رابط فيديو يوتيوب أولاً.' });
+      return;
+    }
     setFormNotice(null);
-    try {
-      const res = await LinkVerificationService.verifyUrl(quickUrl, 'video');
-      setVerificationResult(res);
-      if (res.isValid) {
-        if (res.cleanDisplayUrl) setQuickUrl(res.cleanDisplayUrl);
-        if (res.title) setLectureTitle(res.title);
-        if (res.durationMinutes) setLectureDuration(String(res.durationMinutes));
-        setFormNotice(`✅ تم التحقق من الرابط بنجاح! المدة المكتشفة: ${res.durationFormatted || res.durationMinutes + ' دقيقة'}`);
-      } else {
-        setFormNotice(`⚠️ ${res.error || 'فشل التحقق من الرابط'}`);
-      }
-    } catch (err: any) {
-      setFormNotice('⚠️ تعذر فحص الرابط.');
-    } finally {
-      setIsVerifying(false);
+    const parsed = parseYouTubeUrl(quickUrl);
+    if (!parsed.isValid) {
+      setVerifiedId(null);
+      setFormNotice({
+        type: 'error',
+        message: '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب صحيح (watch?v= أو youtu.be/ أو /shorts/ أو /embed/).'
+      });
+      return;
+    }
+
+    setVerifiedId(parsed.id);
+    setFormNotice({
+      type: 'success',
+      message: `✅ تم التحقق من رابط يوتيوب بنجاح! معرّف الفيديو: (${parsed.id})`
+    });
+    if (!lectureTitle.trim()) {
+      setLectureTitle(`محاضرة كيمياء - فيديو ${parsed.id}`);
     }
   };
 
-  const handleSubmitVerifiedLecture = (e: React.FormEvent) => {
+  const handleSubmitVerifiedLecture = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!lectureTitle.trim() || !quickUrl.trim()) return;
+    if (!lectureTitle.trim() || !quickUrl.trim()) {
+      setFormNotice({ type: 'error', message: '⚠️ برجاء إكمال العنوان والرابط.' });
+      return;
+    }
 
-    const cleanInfo = LinkVerificationService.cleanRawUrl(quickUrl);
-    const finalVideoUrl = verificationResult?.sanitizedUrl || cleanInfo.embedUrl || quickUrl.trim();
+    const parsed = parseYouTubeUrl(quickUrl);
+    if (!parsed.isValid) {
+      setFormNotice({
+        type: 'error',
+        message: '⚠️ الرابط المدخل ليس رابط يوتيوب صالح (فقط YouTube مدعوم للفيديو).'
+      });
+      return;
+    }
 
-    addLecture({
-      title: lectureTitle,
-      description: `محاضرة كيمياء معتمدة لمنصة مستر عمرو السيد (${verificationResult?.durationFormatted || `${lectureDuration} دقيقة`})`,
-      chapterTitle: lectureChapter,
-      grade: activeGrade === 'all' ? 'sec3' : activeGrade,
-      durationMinutes: Number(lectureDuration) || 60,
-      videoUrl: finalVideoUrl,
-      videoFileName: `${lectureTitle}.mp4`,
-      videoFileSize: verificationResult?.fileSizeFormatted || 'بث مباشر عالي الدقة HD 1080p',
-      price: isFreeLecture ? 0 : Number(lecturePrice) || 50,
-      isFree: isFreeLecture,
-    });
+    setIsSubmitting(true);
+    setFormNotice(null);
 
-    setFormNotice('⚡ تم حفظ المحاضرة بنجاح في قاعدة البيانات Supabase!');
-    setTimeout(() => {
-      setShowQuickAddModal(false);
-      setQuickUrl('');
-      setVerificationResult(null);
-      setLectureTitle('');
-      setFormNotice(null);
-    }, 1200);
+    try {
+      const res = await addLecture({
+        title: lectureTitle.trim(),
+        description: `محاضرة كيمياء معتمدة لمنصة مستر عمرو السيد (${lectureDuration} دقيقة)`,
+        chapterTitle: lectureChapter,
+        grade: activeGrade === 'all' ? 'sec3' : activeGrade,
+        durationMinutes: Number(lectureDuration) || 60,
+        videoUrl: parsed.embedUrl,
+        videoFileName: `youtube_${parsed.id}.mp4`,
+        videoFileSize: 'YouTube HD',
+        price: isFreeLecture ? 0 : Number(lecturePrice) || 50,
+        isFree: isFreeLecture,
+        provider: 'youtube',
+        external_id: parsed.id,
+        original_url: quickUrl.trim(),
+      });
+
+      if (res && !res.success) {
+        const errorMsg = res.errorMessage || 'فشل الحفظ في قاعدة البيانات Supabase';
+        console.error('[AddLecture Supabase Error]:', res.error || errorMsg);
+        setFormNotice({ type: 'error', message: `❌ خطأ Supabase: ${errorMsg}` });
+      } else {
+        setFormNotice({ type: 'success', message: '⚡ تم حفظ المحاضرة بنجاح في قاعدة البيانات Supabase!' });
+        setTimeout(() => {
+          setShowQuickAddModal(false);
+          setQuickUrl('');
+          setVerifiedId(null);
+          setLectureTitle('');
+          setFormNotice(null);
+        }, 1200);
+      }
+    } catch (err: any) {
+      console.error('[AddLecture Exception]:', err);
+      setFormNotice({ type: 'error', message: `❌ حدث خطأ غير متوقع: ${err?.message || err}` });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const studentGrade = currentUser?.role === 'student' ? currentUser.grade : activeGrade;
@@ -245,9 +278,15 @@ export const LecturesSection: React.FC = () => {
                     </div>
                   </div>
 
-                  <h3 className="font-bold text-sm text-white group-hover:text-cyan-300 transition-colors line-clamp-2">
-                    {lec.title}
-                  </h3>
+                  <div className="flex items-start gap-2">
+                    <span className="text-[10px] font-bold px-2 py-0.5 mt-0.5 rounded bg-red-600/20 text-red-400 border border-red-500/30 flex items-center gap-1 shrink-0">
+                      <Play className="w-2.5 h-2.5 fill-current" />
+                      <span>YouTube</span>
+                    </span>
+                    <h3 className="font-bold text-sm text-white group-hover:text-cyan-300 transition-colors line-clamp-2">
+                      {lec.title}
+                    </h3>
+                  </div>
 
                   {/* Course Description */}
                   <div className="bg-[#060b18] p-3 rounded-xl border border-slate-800/60">
@@ -311,7 +350,7 @@ export const LecturesSection: React.FC = () => {
         </div>
       )}
 
-      {/* QUICK VERIFIED LECTURE SUBMISSION MODAL (LinkVerificationService) */}
+      {/* QUICK VERIFIED LECTURE SUBMISSION MODAL */}
       {showQuickAddModal && (
         <div
           className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
@@ -324,7 +363,7 @@ export const LecturesSection: React.FC = () => {
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
               <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
                 <Video className="w-5 h-5 text-cyan-400" />
-                <span>إضافة محاضرة مع التحقق من الرابط والمدة (LinkVerificationService)</span>
+                <span>إضافة محاضرة برابط يوتيوب (فحص فوري)</span>
               </h3>
               <button
                 onClick={() => setShowQuickAddModal(false)}
@@ -335,21 +374,28 @@ export const LecturesSection: React.FC = () => {
             </div>
 
             {formNotice && (
-              <div className="p-3 bg-cyan-950/60 border border-cyan-500/40 rounded-xl text-xs text-cyan-200 font-semibold flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span>{formNotice}</span>
+              <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+                formNotice.type === 'error'
+                  ? 'bg-red-950/70 border border-red-500/40 text-red-200'
+                  : 'bg-emerald-950/70 border border-emerald-500/40 text-emerald-200'
+              }`}>
+                {formNotice.type === 'error' ? (
+                  <X className="w-4 h-4 text-red-400 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                )}
+                <span>{formNotice.message}</span>
               </div>
             )}
 
-            <form onSubmit={handleSubmitVerifiedLecture} className="space-y-3.5">
+            <form noValidate onSubmit={handleSubmitVerifiedLecture} className="space-y-3.5">
               <div className="space-y-1.5">
                 <label className="block text-xs font-bold text-slate-300">
-                  رابط الفيديو (YouTube / Google Drive / Telegram / رابط مباشر):
+                  رابط يوتيوب (watch?v= أو youtu.be/ أو /shorts/ أو /embed/):
                 </label>
                 <div className="flex items-center gap-2">
                   <input
-                    type="url"
-                    required
+                    type="text"
                     value={quickUrl}
                     onChange={(e) => setQuickUrl(e.target.value)}
                     placeholder="https://www.youtube.com/watch?v=..."
@@ -359,29 +405,19 @@ export const LecturesSection: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleVerifyVideoLink}
-                    disabled={isVerifying || !quickUrl.trim()}
+                    disabled={!quickUrl.trim()}
                     className="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors shadow-md"
                   >
-                    {isVerifying ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>فحص...</span>
-                      </>
-                    ) : (
-                      <>
-                        <LinkIcon className="w-3.5 h-3.5" />
-                        <span>فحص الرابط</span>
-                      </>
-                    )}
+                    <LinkIcon className="w-3.5 h-3.5" />
+                    <span>تأكيد وفحص</span>
                   </button>
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="block text-xs text-slate-300">عنوان المحاضرة (تم استخراجه تلقائياً)</label>
+                <label className="block text-xs text-slate-300">عنوان المحاضرة</label>
                 <input
                   type="text"
-                  required
                   value={lectureTitle}
                   onChange={(e) => setLectureTitle(e.target.value)}
                   placeholder="مثال: المحاضرة 1: الباب الأول العناصر الانتقالية"
@@ -447,10 +483,20 @@ export const LecturesSection: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/30 cursor-pointer flex items-center gap-1.5"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/30 cursor-pointer flex items-center gap-1.5"
                 >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>حفظ المحاضرة في Supabase ⚡</span>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>جاري الحفظ في Supabase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>حفظ المحاضرة في Supabase ⚡</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

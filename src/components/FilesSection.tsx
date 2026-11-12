@@ -18,7 +18,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
-import { LinkVerificationService, LinkMetadata } from '../utils/LinkVerificationService';
+import { parseDriveUrl } from '../utils/linkParser';
 import { GradeLevel } from '../types';
 
 export const FilesSection: React.FC = () => {
@@ -29,13 +29,13 @@ export const FilesSection: React.FC = () => {
   // Quick Verified Document Submission Modal State
   const [showQuickAddModal, setShowQuickAddModal] = useState(false);
   const [quickUrl, setQuickUrl] = useState('');
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verificationResult, setVerificationResult] = useState<LinkMetadata | null>(null);
+  const [verifiedDriveId, setVerifiedDriveId] = useState<string | null>(null);
   const [docTitle, setDocTitle] = useState('');
   const [docCategory, setDocCategory] = useState('مذكرات الشرح');
   const [docGrade, setDocGrade] = useState<GradeLevel>(activeGrade === 'all' ? 'sec3' : activeGrade);
   const [docDescription, setDocDescription] = useState('');
-  const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Strict Grade Isolation: if student is logged in, show only their grade!
   const targetGrade = currentUser?.role === 'student' ? currentUser.grade : activeGrade;
@@ -52,66 +52,87 @@ export const FilesSection: React.FC = () => {
     return matchesGrade && matchesCategory && matchesSearch;
   });
 
-  const handleVerifyDocLink = async () => {
-    if (!quickUrl.trim()) return;
-    setIsVerifying(true);
+  const handleVerifyDocLink = () => {
+    if (!quickUrl.trim()) {
+      setFormNotice({ type: 'error', message: '⚠️ برجاء كتابة رابط Google Drive أولاً.' });
+      return;
+    }
     setFormNotice(null);
-    try {
-      const res = await LinkVerificationService.verifyUrl(quickUrl, 'document');
-      setVerificationResult(res);
-      if (res.isValid) {
-        if (res.cleanDisplayUrl) setQuickUrl(res.cleanDisplayUrl);
-        if (res.title) setDocTitle(res.title);
-        const pagesText = res.pageCount ? `${res.pageCount} صفحة` : '';
-        const sizeText = res.fileSizeFormatted ? `حجم ${res.fileSizeFormatted}` : '';
-        const details = [pagesText, sizeText].filter(Boolean).join(' · ');
-        setDocDescription(`مذكرة كيمياء معتمدة لمنصة مستر عمرو السيد ${details ? `(${details})` : ''}`);
-        setFormNotice(`✅ تم التحقق من الرابط بنجاح! نوع المحتوى: ${res.contentType} ${res.pageCount ? `· عدد الصفحات: ${res.pageCount}` : ''}`);
-      } else {
-        setFormNotice(`⚠️ ${res.error || 'فشل التحقق من الرابط'}`);
-      }
-    } catch (err: any) {
-      setFormNotice('⚠️ تعذر فحص الرابط.');
-    } finally {
-      setIsVerifying(false);
+    const parsed = parseDriveUrl(quickUrl);
+    if (!parsed.isValid) {
+      setVerifiedDriveId(null);
+      setFormNotice({
+        type: 'error',
+        message: '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط Google Drive صحيح (/file/d/ID أو ?id=ID أو /open?id=ID).'
+      });
+      return;
+    }
+
+    setVerifiedDriveId(parsed.id);
+    setFormNotice({
+      type: 'success',
+      message: `✅ تم التحقق من رابط Google Drive بنجاح! معرّف الملف: (${parsed.id})`
+    });
+    if (!docTitle.trim()) {
+      setDocTitle(`مذكرة كيمياء - ملف ${parsed.id.slice(0, 8)}`);
     }
   };
 
-  const handleSubmitVerifiedDoc = (e: React.FormEvent) => {
+  const handleSubmitVerifiedDoc = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!docTitle.trim() || !quickUrl.trim()) return;
+    if (!docTitle.trim() || !quickUrl.trim()) {
+      setFormNotice({ type: 'error', message: '⚠️ برجاء إكمال العنوان والرابط.' });
+      return;
+    }
 
-    const cleanInfo = LinkVerificationService.cleanRawUrl(quickUrl);
-    const finalFileUrl = verificationResult?.sanitizedUrl || cleanInfo.embedUrl || quickUrl.trim();
+    const parsed = parseDriveUrl(quickUrl);
+    if (!parsed.isValid) {
+      setFormNotice({
+        type: 'error',
+        message: '⚠️ الرابط المدخل ليس رابط Google Drive صالح (فقط Google Drive مدعوم للملفات والمذكرات).'
+      });
+      return;
+    }
 
-    const fileType = verificationResult?.category === 'doc'
-      ? 'doc'
-      : verificationResult?.category === 'xls'
-      ? 'xls'
-      : verificationResult?.category === 'image'
-      ? 'image'
-      : 'pdf';
+    setIsSubmitting(true);
+    setFormNotice(null);
 
-    addFile({
-      title: docTitle.trim(),
-      category: docCategory,
-      grade: docGrade,
-      fileUrl: finalFileUrl,
-      fileName: `${docTitle.trim()}.${fileType === 'pdf' ? 'pdf' : 'docx'}`,
-      fileType: fileType as any,
-      sizeMb: verificationResult?.fileSizeBytes ? +(verificationResult.fileSizeBytes / (1024 * 1024)).toFixed(1) : 2.5,
-      description: docDescription || `مذكرة معتمدة مرفوعة بتاريخ ${new Date().toLocaleDateString('ar-EG')}`,
-    });
+    try {
+      const res = await addFile({
+        title: docTitle.trim(),
+        category: docCategory,
+        grade: docGrade,
+        fileUrl: parsed.previewUrl,
+        fileName: `${docTitle.trim()}.pdf`,
+        fileType: 'pdf',
+        sizeMb: 5.0,
+        description: docDescription || `مذكرة كيمياء معتمدة من Google Drive مرفوعة بتاريخ ${new Date().toLocaleDateString('ar-EG')}`,
+        provider: 'drive',
+        external_id: parsed.id,
+        original_url: quickUrl.trim(),
+      });
 
-    setFormNotice('⚡ تم حفظ المذكرة بنجاح في قاعدة البيانات Supabase!');
-    setTimeout(() => {
-      setShowQuickAddModal(false);
-      setQuickUrl('');
-      setVerificationResult(null);
-      setDocTitle('');
-      setDocDescription('');
-      setFormNotice(null);
-    }, 1200);
+      if (res && !res.success) {
+        const errorMsg = res.errorMessage || 'فشل الحفظ في قاعدة البيانات Supabase';
+        console.error('[AddFile Supabase Error]:', res.error || errorMsg);
+        setFormNotice({ type: 'error', message: `❌ خطأ Supabase: ${errorMsg}` });
+      } else {
+        setFormNotice({ type: 'success', message: '⚡ تم حفظ المذكرة بنجاح في قاعدة البيانات Supabase!' });
+        setTimeout(() => {
+          setShowQuickAddModal(false);
+          setQuickUrl('');
+          setVerifiedDriveId(null);
+          setDocTitle('');
+          setDocDescription('');
+          setFormNotice(null);
+        }, 1200);
+      }
+    } catch (err: any) {
+      console.error('[AddFile Exception]:', err);
+      setFormNotice({ type: 'error', message: `❌ حدث خطأ غير متوقع: ${err?.message || err}` });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDownload = (fileUrl: string, fileName: string) => {
@@ -180,7 +201,7 @@ export const FilesSection: React.FC = () => {
             <div className="flex items-center justify-between border-b border-cyan-900/40 pb-3">
               <div className="flex items-center gap-2 text-cyan-400 font-bold text-base">
                 <FileCheck2 className="w-5 h-5 text-cyan-400" />
-                <span>إضافة مذكرة أو مستند مفحوص الرابط والصفحات ⚡</span>
+                <span>إضافة مذكرة برابط Google Drive (فحص فوري)</span>
               </div>
               <button
                 type="button"
@@ -191,41 +212,31 @@ export const FilesSection: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSubmitVerifiedDoc} className="space-y-4">
+            <form noValidate onSubmit={handleSubmitVerifiedDoc} className="space-y-4">
               {/* URL Input & Verify Button */}
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-200 block">
-                  رابط المذكرة أو المستند الخارجي (PDF / Google Drive / مباشر):
+                  رابط Google Drive (/file/d/ID أو ?id=ID أو /open?id=ID):
                 </label>
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
                     <input
-                      type="url"
+                      type="text"
                       value={quickUrl}
                       onChange={(e) => setQuickUrl(e.target.value)}
-                      placeholder="https://example.com/file.pdf أو رابط Google Drive"
+                      placeholder="https://drive.google.com/file/d/.../view"
                       className="w-full p-2.5 ps-8 bg-[#050811] border border-slate-700 focus:border-cyan-400 rounded-xl text-xs text-white font-mono focus:outline-none"
-                      required
                     />
                     <LinkIcon className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-3" />
                   </div>
                   <button
                     type="button"
                     onClick={handleVerifyDocLink}
-                    disabled={isVerifying || !quickUrl.trim()}
+                    disabled={!quickUrl.trim()}
                     className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shrink-0 shadow-md"
                   >
-                    {isVerifying ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>فحص الرابط...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>فحص الرابط وقراءة الصفحات</span>
-                      </>
-                    )}
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>تأكيد وفحص</span>
                   </button>
                 </div>
               </div>
@@ -233,46 +244,12 @@ export const FilesSection: React.FC = () => {
               {/* Status Banner */}
               {formNotice && (
                 <div className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
-                  formNotice.includes('✅') || formNotice.includes('⚡')
+                  formNotice.type === 'success'
                     ? 'bg-emerald-950/60 border-emerald-600/50 text-emerald-300'
-                    : 'bg-amber-950/60 border-amber-600/50 text-amber-300'
+                    : 'bg-red-950/60 border-red-600/50 text-red-300'
                 }`}>
                   <Sparkles className="w-4 h-4 shrink-0" />
-                  <span>{formNotice}</span>
-                </div>
-              )}
-
-              {/* Verified Information Box */}
-              {verificationResult && (
-                <div className="p-3.5 bg-cyan-950/30 border border-cyan-800/40 rounded-xl space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-cyan-300 font-bold border-b border-cyan-800/30 pb-1.5">
-                    <span>نتائج الفحص الحي لترويسات الرابط (HEAD Metadata):</span>
-                    <span className="text-[11px] bg-cyan-900/60 px-2 py-0.5 rounded text-cyan-200">
-                      {verificationResult.contentType}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-slate-300 text-[11px]">
-                    <div>
-                      <span className="text-slate-400">عدد الصفحات المكتشف: </span>
-                      <span className="font-bold text-white">
-                        {verificationResult.pageCount ? `${verificationResult.pageCount} صفحة` : 'جاري العرض المتجاوب'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">حجم الملف المقروء: </span>
-                      <span className="font-bold text-white">{verificationResult.fileSizeFormatted || 'غير محدد'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">دعم البث التدفقي الجزئي: </span>
-                      <span className="font-bold text-emerald-400">
-                        {verificationResult.acceptRanges ? 'مفعل (Accept-Ranges)' : 'تحميل تدريجي آمن'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">نوع المشغل: </span>
-                      <span className="font-bold text-cyan-300">عارض مدمج بدون إعلانات</span>
-                    </div>
-                  </div>
+                  <span>{formNotice.message}</span>
                 </div>
               )}
 
@@ -286,7 +263,6 @@ export const FilesSection: React.FC = () => {
                     onChange={(e) => setDocTitle(e.target.value)}
                     placeholder="مثال: مذكرة الباب الأول - الكيمياء العضوية"
                     className="w-full p-2.5 bg-[#050811] border border-slate-700 focus:border-cyan-400 rounded-xl text-xs text-white focus:outline-none"
-                    required
                   />
                 </div>
 
@@ -326,7 +302,7 @@ export const FilesSection: React.FC = () => {
                     rows={2}
                     value={docDescription}
                     onChange={(e) => setDocDescription(e.target.value)}
-                    placeholder="وصف مختصر للمذكرة أو عدد صفحاتها ومحتواها..."
+                    placeholder="وصف مختصر للمذكرة أو محتواها..."
                     className="w-full p-2.5 bg-[#050811] border border-slate-700 focus:border-cyan-400 rounded-xl text-xs text-white focus:outline-none"
                   />
                 </div>
@@ -343,11 +319,20 @@ export const FilesSection: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={!docTitle.trim() || !quickUrl.trim()}
+                  disabled={isSubmitting || !docTitle.trim() || !quickUrl.trim()}
                   className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md flex items-center gap-1.5"
                 >
-                  <BookOpen className="w-4 h-4" />
-                  <span>حفظ المذكرة في Supabase ⚡</span>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>جاري الحفظ في Supabase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <BookOpen className="w-4 h-4" />
+                      <span>حفظ المذكرة في Supabase ⚡</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>
@@ -426,6 +411,11 @@ export const FilesSection: React.FC = () => {
                     <FileText className="w-6 h-6" />
                   </div>
                   <div>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 shrink-0">
+                        <span>Google Drive</span>
+                      </span>
+                    </div>
                     <h3 className="font-bold text-sm text-white line-clamp-2 leading-snug">
                       {file.title}
                     </h3>
