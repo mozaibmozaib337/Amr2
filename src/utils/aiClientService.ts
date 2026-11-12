@@ -156,6 +156,36 @@ export function extractSmartQuestions(grade: string = 'sec3', instructions: stri
   };
 }
 
+export interface AiHealthStatus {
+  configured: boolean;
+  healthy: boolean;
+  primaryModel: string;
+  fallbackModel: string;
+  activeModel?: string;
+  errorCode?: string;
+  message: string;
+}
+
+export async function checkAiHealth(probe: boolean = false): Promise<AiHealthStatus> {
+  try {
+    const response = await fetch(`/api/ai-health${probe ? '?probe=1' : ''}`);
+    const data = await response.json().catch(() => null);
+    if (data) {
+      return data;
+    }
+  } catch {
+    // Server offline
+  }
+  return {
+    configured: false,
+    healthy: false,
+    primaryModel: 'gemini-4-hydrogen',
+    fallbackModel: 'gemini-3.1-flash-lite',
+    errorCode: 'NETWORK',
+    message: 'تعذر الوصول إلى خادم الذكاء الاصطناعي حالياً.',
+  };
+}
+
 export async function parseQuizWithAiClient(payload: {
   fileData?: string;
   mimeType?: string;
@@ -164,6 +194,10 @@ export async function parseQuizWithAiClient(payload: {
   rawText?: string;
 }): Promise<{
   success: boolean;
+  source?: 'gemini' | 'fallback';
+  modelUsed?: string | null;
+  errorCode?: string;
+  warning?: string;
   quizTitle: string;
   suggestedDurationMinutes: number;
   suggestedTotalMarks: number;
@@ -177,20 +211,66 @@ export async function parseQuizWithAiClient(payload: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (response.ok) {
-      const data = await response.json();
-      if (data && data.success && Array.isArray(data.questions) && data.questions.length > 0) {
-        return data;
+    const data = await response.json().catch(() => null);
+
+    if (data) {
+      // Server responded (either with Gemini results, fallback questions + warning, or explicit OCR error)
+      if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
+        return {
+          ...data,
+          source: data.source || (response.ok ? 'gemini' : 'fallback'),
+        };
+      }
+      if (payload.fileData && !payload.rawText) {
+        // Do NOT mask image/PDF OCR failure with unrelated static sample questions
+        return {
+          success: false,
+          source: 'fallback',
+          errorCode: data.errorCode || `HTTP_${response.status}`,
+          warning: data.warning || data.error,
+          error: data.error || data.warning || 'تعذر استخراج الأسئلة من الصورة/الملف عبر Gemini API.',
+          quizTitle: '',
+          suggestedDurationMinutes: 20,
+          suggestedTotalMarks: 0,
+          questions: [],
+        };
+      }
+      if (data.error || data.warning) {
+        const res = extractSmartQuestions(payload.grade, payload.instructions, payload.rawText);
+        return {
+          success: true,
+          source: 'fallback',
+          errorCode: data.errorCode,
+          warning: data.warning || data.error,
+          quizTitle: res.quizTitle,
+          suggestedDurationMinutes: res.suggestedDurationMinutes,
+          suggestedTotalMarks: res.suggestedTotalMarks,
+          questions: res.questions,
+        };
       }
     }
   } catch {
-    // If running in pure static Vercel mode without server, fall back instantly without 404 block
+    // Server unreachable / network error
+    if (payload.fileData && !payload.rawText) {
+      return {
+        success: false,
+        source: 'fallback',
+        errorCode: 'NETWORK',
+        error: 'تعذر الاتصال بالسيرفر لتحليل الصورة أو الملف. تأكد من اتصالك بالإنترنت وأعد المحاولة.',
+        quizTitle: '',
+        suggestedDurationMinutes: 20,
+        suggestedTotalMarks: 0,
+        questions: [],
+      };
+    }
   }
 
-  // High-speed, high-accuracy client-side engine (zero latency, zero errors)
+  // Client-side engine fallback when running without server / text-only request
   const res = extractSmartQuestions(payload.grade, payload.instructions, payload.rawText);
   return {
     success: true,
+    source: 'fallback',
+    warning: 'تعذر الاتصال بخادم Gemini؛ تم توليد الأسئلة عبر المحرك المحلي الاحتياطي.',
     quizTitle: res.quizTitle,
     suggestedDurationMinutes: res.suggestedDurationMinutes,
     suggestedTotalMarks: res.suggestedTotalMarks,
@@ -198,31 +278,84 @@ export async function parseQuizWithAiClient(payload: {
   };
 }
 
-export async function chatWithAiClient(message: string, context?: string): Promise<{ success: boolean; reply: string }> {
+export async function chatWithAiClient(
+  message: string,
+  context?: string
+): Promise<{
+  success: boolean;
+  source?: 'gemini' | 'fallback';
+  modelUsed?: string | null;
+  errorCode?: string;
+  warning?: string;
+  error?: string;
+  reply: string;
+}> {
   try {
     const response = await fetch('/api/ai-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, context }),
     });
-    if (response.ok) {
-      const data = await response.json();
-      if (data && data.success && data.reply) {
-        return data;
-      }
+    const data = await response.json().catch(() => null);
+    if (data && data.reply) {
+      return data;
     }
   } catch {
-    // Fall back smoothly
+    // Network unreachable fallback
   }
 
   return {
-    success: true,
-    reply: `أهلاً بك يا مستر عمرو! استلمت توجيهاتك بخصوص (${context === 'homework' ? 'شيت الواجب' : 'الامتحان'}): "${message}". سأطبقها بدقة تامة وبأعلى سرعة ⚡.`,
+    success: false,
+    source: 'fallback',
+    errorCode: 'NETWORK',
+    warning: 'تعذر الوصول إلى خادم Gemini حالياً؛ تم تسجيل توجيهاتك محلياً.',
+    reply: `⚠️ تعذر الاتصال بمحرك Gemini حالياً. تم تسجيل توجيهاتك بخصوص (${context === 'homework' ? 'شيت الواجب' : 'الامتحان'}): "${message}".`,
   };
 }
 
+export async function extractStudentsWithAiClient(
+  rawText?: string,
+  imageData?: string,
+  mimeType?: string
+): Promise<{
+  success: boolean;
+  source?: 'gemini' | 'fallback';
+  modelUsed?: string | null;
+  errorCode?: string;
+  warning?: string;
+  error?: string;
+  students: any[];
+  message: string;
+}> {
+  if (imageData || rawText) {
+    try {
+      const response = await fetch('/api/ai-extract-students', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageData, mimeType, rawText }),
+      });
+      const data = await response.json().catch(() => null);
+      if (data) {
+        if (data.success && Array.isArray(data.students) && data.students.length > 0) {
+          return data;
+        }
+        if (imageData && !rawText) {
+          return {
+            success: false,
+            source: 'fallback',
+            errorCode: data.errorCode,
+            error: data.error || data.message,
+            warning: data.error || data.message,
+            students: [],
+            message: data.message || data.error || 'تعذر قراءة كشف الطلاب من الصورة عبر Gemini.',
+          };
+        }
+      }
+    } catch {
+      // Fall back to text parser if rawText exists
+    }
+  }
 
-export async function extractStudentsWithAiClient(rawText?: string): Promise<{ success: boolean; students: any[]; message: string }> {
   if (rawText && rawText.length > 5) {
     const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
     const parsed: any[] = [];
@@ -238,20 +371,17 @@ export async function extractStudentsWithAiClient(rawText?: string): Promise<{ s
     });
     return {
       success: true,
+      source: 'fallback',
       students: parsed,
-      message: `تم استخراج ${parsed.length} طالباً بنجاح!`,
+      message: `تم استخراج ${parsed.length} طالباً بنجاح من النص!`,
     };
   }
 
-  // Sample students
-  const sample = [
-    { studentName: 'أحمد محمود إبراهيم', phone: '01012345678', studentCode: 'SEC3-101' },
-    { studentName: 'مريم طارق الشناوي', phone: '01123456789', studentCode: 'SEC3-102' },
-    { studentName: 'زياد حسن عبد الرحمن', phone: '01234567890', studentCode: 'SEC3-103' },
-  ];
   return {
-    success: true,
-    students: sample,
-    message: `تم استخراج ${sample.length} طلاب بنجاح وجاهزون للإضافة!`,
+    success: false,
+    source: 'fallback',
+    errorCode: 'NO_DATA',
+    students: [],
+    message: 'لم يتم إرفاق صورة أو بيانات واضحة لكشف الطلاب.',
   };
 }

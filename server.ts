@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { GoogleGenAI, Type } from '@google/genai';
 import path from 'path';
@@ -602,17 +603,249 @@ app.get('/api/telegram-isolated-view', async (req, res) => {
 });
 
 
-// Initialize Google GenAI client (Server-Side only)
-const ai = process.env.GEMINI_API_KEY
-  ? new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
+// Active Google Gemini models (Server-Side only)
+const GEMINI_PRIMARY_MODEL = 'gemini-4-hydrogen';
+const GEMINI_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+const GEMINI_CANDIDATE_MODELS = [GEMINI_PRIMARY_MODEL, GEMINI_FALLBACK_MODEL] as const;
+
+function getConfiguredGeminiApiKey(): string {
+  const key = (process.env.GEMINI_API_KEY || '').trim();
+  if (!key || key === 'MY_GEMINI_API_KEY' || key === 'your_api_key_here') {
+    return '';
+  }
+  return key;
+}
+
+function getGeminiClient(): GoogleGenAI | null {
+  const apiKey = getConfiguredGeminiApiKey();
+  if (!apiKey) return null;
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
       },
-    })
-  : null;
+    },
+  });
+}
+
+interface GeminiClassifiedError {
+  code: 'MISSING_KEY' | 'INVALID_KEY' | 'QUOTA_EXCEEDED' | 'MODEL_NOT_FOUND' | 'TIMEOUT' | 'TRANSIENT' | 'UNKNOWN';
+  httpStatus: number;
+  retryable: boolean;
+  userMessage: string;
+  rawMessage: string;
+}
+
+function classifyGeminiError(err: any): GeminiClassifiedError {
+  const rawMessage = String(err?.message || err || 'Unknown error');
+  const lower = rawMessage.toLowerCase();
+  const status = Number(err?.status || err?.statusCode || err?.code || 0);
+
+  if (lower.includes('missing_key')) {
+    return {
+      code: 'MISSING_KEY',
+      httpStatus: 503,
+      retryable: false,
+      userMessage: 'مفتاح GEMINI_API_KEY غير مضبوط حالياً على السيرفر. يرجى التأكد من إضافته في لوحة الإعدادات (Settings > Secrets).',
+      rawMessage,
+    };
+  }
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('api key not valid') ||
+    lower.includes('permission_denied') ||
+    lower.includes('permission denied') ||
+    lower.includes('invalid_argument') && lower.includes('api key')
+  ) {
+    return {
+      code: 'INVALID_KEY',
+      httpStatus: 403,
+      retryable: false,
+      userMessage: 'مفتاح Gemini API غير صالح أو انتهت صلاحيته (403/400). يرجى مراجعة المفتاح أو تحديثه في لوحة (Settings > Secrets).',
+      rawMessage,
+    };
+  }
+
+  if (
+    status === 429 ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('quota') ||
+    lower.includes('rate limit') ||
+    lower.includes('too many requests')
+  ) {
+    return {
+      code: 'QUOTA_EXCEEDED',
+      httpStatus: 429,
+      retryable: true,
+      userMessage: 'تم تجاوز حد الطلبات أو الحصة المجانية لـ Gemini API مؤقتاً (429 Quota Exceeded). يُرجى الانتظار قليلاً والمحاولة مجدداً، أو التحقق من باقة المفتاح في (Settings > Secrets).',
+      rawMessage,
+    };
+  }
+
+  if (status === 404 || lower.includes('not_found') || lower.includes('is not found for api version')) {
+    return {
+      code: 'MODEL_NOT_FOUND',
+      httpStatus: 404,
+      retryable: false,
+      userMessage: 'النموذج المطلوب غير متاح حالياً (404). تم التحويل التلقائي للتحقق من النموذج الاحتياطي.',
+      rawMessage,
+    };
+  }
+
+  if (lower.includes('ai_timeout') || lower.includes('timeout') || lower.includes('etimedout') || lower.includes('aborted')) {
+    return {
+      code: 'TIMEOUT',
+      httpStatus: 504,
+      retryable: true,
+      userMessage: 'انتهت مهلة انتظار استجابة خوادم Google Gemini. يرجى إعادة المحاولة أو تقليل حجم الملف المرفق.',
+      rawMessage,
+    };
+  }
+
+  if (status >= 500 || lower.includes('unavailable') || lower.includes('overloaded') || lower.includes('econnreset') || lower.includes('fetch failed')) {
+    return {
+      code: 'TRANSIENT',
+      httpStatus: 503,
+      retryable: true,
+      userMessage: 'خوادم Google Gemini تشهد ضغطاً مؤقتاً حالياً (503). يرجى المحاولة مرة أخرى بعد لحظات.',
+      rawMessage,
+    };
+  }
+
+  return {
+    code: 'UNKNOWN',
+    httpStatus: 500,
+    retryable: false,
+    userMessage: 'تعذر إكمال طلب الذكاء الاصطناعي حالياً. يرجى المحاولة مرة أخرى.',
+    rawMessage,
+  };
+}
+
+const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function generateContentWithRetry(
+  client: GoogleGenAI,
+  params: {
+    contents: any;
+    config?: any;
+    timeoutMs?: number;
+    models?: readonly string[];
+  }
+): Promise<{
+  text: string | null;
+  modelUsed: string | null;
+  lastError: GeminiClassifiedError | null;
+}> {
+  const modelsToTry = params.models || GEMINI_CANDIDATE_MODELS;
+  const timeoutMs = params.timeoutMs ?? 60000;
+  let lastError: GeminiClassifiedError | null = null;
+
+  for (const model of modelsToTry) {
+    const maxAttempts = 3; // initial try + up to 2 exponential backoff retries
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('AI_TIMEOUT')), timeoutMs)
+        );
+        const genPromise = client.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        });
+
+        const response: any = await Promise.race([genPromise, timeoutPromise]);
+        const text = response?.text?.trim();
+        if (text) {
+          return { text, modelUsed: model, lastError: null };
+        }
+        lastError = {
+          code: 'UNKNOWN',
+          httpStatus: 502,
+          retryable: true,
+          userMessage: 'لم يُرجع نموذج Gemini أي محتوى نصي لهذا الطلب.',
+          rawMessage: 'Empty response.text',
+        };
+      } catch (err: any) {
+        const classified = classifyGeminiError(err);
+        lastError = classified;
+        console.warn(
+          `[Gemini] model=${model} attempt=${attempt}/${maxAttempts} code=${classified.code}: ${classified.rawMessage.slice(0, 140)}`
+        );
+
+        // If key itself is invalid or model not found, no point retrying same attempt/model
+        if (classified.code === 'INVALID_KEY') {
+          return { text: null, modelUsed: null, lastError: classified };
+        }
+        if (!classified.retryable) {
+          break; // try next model
+        }
+        if (attempt < maxAttempts) {
+          const backoffMs = 1200 * Math.pow(2, attempt - 1); // 1.2s, then 2.4s
+          await waitMs(backoffMs);
+        }
+      }
+    }
+  }
+
+  return { text: null, modelUsed: null, lastError };
+}
+
+// Gemini Health & Diagnostics Route (Never exposes API key)
+app.get('/api/ai-health', async (req, res) => {
+  const client = getGeminiClient();
+  const configured = Boolean(client);
+  const runProbe = req.query.probe === '1' || req.query.probe === 'true';
+
+  if (!configured || !client) {
+    return res.json({
+      configured: false,
+      healthy: false,
+      primaryModel: GEMINI_PRIMARY_MODEL,
+      fallbackModel: GEMINI_FALLBACK_MODEL,
+      errorCode: 'MISSING_KEY',
+      message: 'مفتاح GEMINI_API_KEY غير مضبوط على السيرفر. يرجى إضافته في Settings > Secrets.',
+    });
+  }
+
+  if (!runProbe) {
+    return res.json({
+      configured: true,
+      healthy: true,
+      primaryModel: GEMINI_PRIMARY_MODEL,
+      fallbackModel: GEMINI_FALLBACK_MODEL,
+      message: 'مفتاح Gemini مُهيأ وجاهز على السيرفر.',
+    });
+  }
+
+  const probe = await generateContentWithRetry(client, {
+    contents: 'Reply with only the word: OK',
+    timeoutMs: 15000,
+  });
+
+  if (probe.text) {
+    return res.json({
+      configured: true,
+      healthy: true,
+      primaryModel: GEMINI_PRIMARY_MODEL,
+      fallbackModel: GEMINI_FALLBACK_MODEL,
+      activeModel: probe.modelUsed,
+      message: `تم التحقق بنجاح! الاتصال بنموذج ${probe.modelUsed} يعمل بكفاءة.`,
+    });
+  }
+
+  return res.status(probe.lastError?.httpStatus || 503).json({
+    configured: true,
+    healthy: false,
+    primaryModel: GEMINI_PRIMARY_MODEL,
+    fallbackModel: GEMINI_FALLBACK_MODEL,
+    errorCode: probe.lastError?.code || 'UNKNOWN',
+    message: probe.lastError?.userMessage || 'تعذر التحقق من اتصال Gemini API.',
+  });
+});
 
 // Helper to extract or parse educational questions tailored to any subject (Chemistry, Biology, Science, Primary to Secondary)
 function extractSmartQuestions(grade: string = 'sec3', instructions: string = '', rawText: string = ''): any {
@@ -788,7 +1021,7 @@ function extractSmartQuestions(grade: string = 'sec3', instructions: string = ''
   };
 }
 
-// Interactive Conversational AI Chat Endpoint for Teacher (Powered by Google Gemini 3.8 Flash)
+// Interactive Conversational AI Chat Endpoint for Teacher (Powered by active Gemini 4 Hydrogen / 3.1 Flash Lite)
 app.post('/api/ai-chat', async (req, res) => {
   try {
     const { message, history, fileData, mimeType, context } = req.body;
@@ -836,39 +1069,55 @@ app.post('/api/ai-chat', async (req, res) => {
       text: `${convHistory}رسالة المعلم الحالية: "${message || 'أرفقت هذا الملف، كيف ستعالجه؟'}"\nالقسم: ${context === 'homework' ? 'شيتات وواجبات' : 'امتحانات واختبارات'}\nأجب المعلم بأسلوب Google Gemini الذكي والواثق.`
     });
 
-    const models = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
-    let replyText = '';
-
-    if (ai) {
-      for (const model of models) {
-        try {
-          const response = await ai.models.generateContent({
-            model,
-            contents: parts,
-            config: {
-              systemInstruction: systemPrompt,
-            },
-          });
-          if (response && response.text) {
-            replyText = response.text.trim();
-            break;
-          }
-        } catch (err: any) {
-          console.warn(`[AI-Chat] Model ${model} failed:`, err.message?.slice(0, 100));
-        }
-      }
+    const client = getGeminiClient();
+    if (!client) {
+      const missingErr = classifyGeminiError(new Error('MISSING_KEY'));
+      return res.status(missingErr.httpStatus).json({
+        success: false,
+        source: 'fallback',
+        errorCode: missingErr.code,
+        error: missingErr.userMessage,
+        warning: missingErr.userMessage,
+        reply: 'تعذر الاتصال بمحرك Gemini لأن مفتاح API غير مضبوط على السيرفر. يمكنك متابعة العمل بالمحرر اليدوي أو ضبط المفتاح من Settings > Secrets.',
+      });
     }
 
-    if (!replyText) {
-      replyText = 'أهلاً بك يا مستر عمرو! استلمت ملفك وتوجيهاتك وسأطبقها بالحرف الواحد وبدقة تامة ⚡ عبر محرك Google Gemini.';
+    const result = await generateContentWithRetry(client, {
+      contents: parts,
+      config: {
+        systemInstruction: systemPrompt,
+      },
+      timeoutMs: 30000,
+    });
+
+    if (result.text) {
+      return res.json({
+        success: true,
+        source: 'gemini',
+        modelUsed: result.modelUsed,
+        reply: result.text,
+      });
     }
 
-    return res.json({ success: true, reply: replyText });
+    const warningMsg = result.lastError?.userMessage || 'تعذر الحصول على رد من Gemini حالياً.';
+    return res.status(result.lastError?.httpStatus || 503).json({
+      success: false,
+      source: 'fallback',
+      errorCode: result.lastError?.code || 'UNKNOWN',
+      error: warningMsg,
+      warning: warningMsg,
+      reply: `⚠️ ${warningMsg}`,
+    });
   } catch (err: any) {
     console.error('Error in /api/ai-chat:', err);
-    return res.json({
-      success: true,
-      reply: 'حاضر يا مستر عمرو! تم تسجيل طلبك وسأنفذه بالحرف الواحد عبر Google Gemini.',
+    const classified = classifyGeminiError(err);
+    return res.status(classified.httpStatus).json({
+      success: false,
+      source: 'fallback',
+      errorCode: classified.code,
+      error: classified.userMessage,
+      warning: classified.userMessage,
+      reply: `⚠️ ${classified.userMessage}`,
     });
   }
 });
@@ -919,8 +1168,9 @@ app.post('/api/ai-parse-quiz', async (req, res) => {
       instructions ? `توجيهات وملاحظات المعلم: ${instructions}.` : ''
     } ${grade ? `المرحلة أو الصف المستهدف: ${grade}.` : ''}`;
 
-    const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
     let geminiResponseText: string | null = null;
+    let modelUsed: string | null = null;
+    let geminiError: GeminiClassifiedError | null = null;
 
     const supportedGeminiMimes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
     const canSendInline = cleanBase64 && supportedGeminiMimes.includes(cleanMimeType);
@@ -941,86 +1191,76 @@ app.post('/api/ai-parse-quiz', async (req, res) => {
       parts.push({ text: userPrompt });
     }
 
-    if (ai) {
-      for (const modelName of candidateModels) {
-      try {
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('AI_TIMEOUT')), 60000)
-        );
-
-        const genPromise = ai.models.generateContent({
-          model: modelName,
-          contents: parts,
-          config: {
-            systemInstruction: systemPrompt,
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                quizTitle: {
-                  type: Type.STRING,
-                  description: 'عنوان مقترح للاختبار بناءً على موضوع الأسئلة والمادة المستخرجة',
-                },
-                suggestedDurationMinutes: {
-                  type: Type.INTEGER,
-                  description: 'المدة المقترحة للامتحان بالدقائق',
-                },
-                suggestedTotalMarks: {
-                  type: Type.INTEGER,
-                  description: 'الدرجة الكلية المقترحة للامتحان',
-                },
-                questions: {
-                  type: Type.ARRAY,
-                  description: 'قائمة الأسئلة المستخرجة حرفياً من الورقة أو الملف',
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      text: {
-                        type: Type.STRING,
-                        description: 'نص السؤال كاملاً كما ورد في الورقة بدقة 100%',
-                      },
-                      type: {
-                        type: Type.STRING,
-                        description: 'نوع السؤال: mcq أو essay',
-                      },
-                      options: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                        description: 'الخيارات الأربعة للسؤال إن كان اختيار من متعدد',
-                      },
-                      correctAnswerIndex: {
-                        type: Type.INTEGER,
-                        description: 'رقم الخيار الصحيح (0 للأول، 1 للثاني...)',
-                      },
-                      modelAnswer: {
-                        type: Type.STRING,
-                        description: 'الإجابة النموذجية المفصلة والشرح',
-                      },
-                      explanation: {
-                        type: Type.STRING,
-                        description: 'تفسير علمي وتوضيح سبب صحة الإجابة',
-                      },
+    const client = getGeminiClient();
+    if (!client) {
+      geminiError = classifyGeminiError(new Error('MISSING_KEY'));
+    } else {
+      const result = await generateContentWithRetry(client, {
+        contents: parts,
+        timeoutMs: 60000,
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              quizTitle: {
+                type: Type.STRING,
+                description: 'عنوان مقترح للاختبار بناءً على موضوع الأسئلة والمادة المستخرجة',
+              },
+              suggestedDurationMinutes: {
+                type: Type.INTEGER,
+                description: 'المدة المقترحة للامتحان بالدقائق',
+              },
+              suggestedTotalMarks: {
+                type: Type.INTEGER,
+                description: 'الدرجة الكلية المقترحة للامتحان',
+              },
+              questions: {
+                type: Type.ARRAY,
+                description: 'قائمة الأسئلة المستخرجة حرفياً من الورقة أو الملف',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: {
+                      type: Type.STRING,
+                      description: 'نص السؤال كاملاً كما ورد في الورقة بدقة 100%',
                     },
-                    required: ['text', 'options', 'correctAnswerIndex'],
+                    type: {
+                      type: Type.STRING,
+                      description: 'نوع السؤال: mcq أو essay',
+                    },
+                    options: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: 'الخيارات الأربعة للسؤال إن كان اختيار من متعدد',
+                    },
+                    correctAnswerIndex: {
+                      type: Type.INTEGER,
+                      description: 'رقم الخيار الصحيح (0 للأول، 1 للثاني...)',
+                    },
+                    modelAnswer: {
+                      type: Type.STRING,
+                      description: 'الإجابة النموذجية المفصلة والشرح',
+                    },
+                    explanation: {
+                      type: Type.STRING,
+                      description: 'تفسير علمي وتوضيح سبب صحة الإجابة',
+                    },
                   },
+                  required: ['text', 'options', 'correctAnswerIndex'],
                 },
               },
-              required: ['quizTitle', 'questions'],
             },
+            required: ['quizTitle', 'questions'],
           },
-        });
+        },
+      });
 
-        const response: any = await Promise.race([genPromise, timeoutPromise]);
-
-        if (response && response.text) {
-          geminiResponseText = response.text;
-          break;
-        }
-      } catch (geminiErr: any) {
-        console.warn(`Model ${modelName} encountered error:`, geminiErr.message?.slice(0, 100));
-      }
+      geminiResponseText = result.text;
+      modelUsed = result.modelUsed;
+      geminiError = result.lastError;
     }
-  }
 
     const questionImageAttachment = cleanBase64
       ? `data:${cleanMimeType};base64,${cleanBase64}`
@@ -1039,15 +1279,23 @@ app.post('/api/ai-parse-quiz', async (req, res) => {
         const formattedQuestions = (parsedData.questions || []).map((q: any, idx: number) => ({
           id: `ai_q_${Date.now()}_${idx + 1}`,
           text: q.text,
+          type: q.type === 'essay' ? 'essay' : 'mcq',
           image: questionImageAttachment,
-          options: Array.isArray(q.options) && q.options.length >= 2 ? q.options : ['الخيار (أ)', 'الخيار (ب)', 'الخيار (ج)', 'الخيار (د)'],
+          options: q.type === 'essay'
+            ? []
+            : Array.isArray(q.options) && q.options.length >= 2
+              ? q.options
+              : ['الخيار (أ)', 'الخيار (ب)', 'الخيار (ج)', 'الخيار (د)'],
           correctAnswerIndex: typeof q.correctAnswerIndex === 'number' ? q.correctAnswerIndex : 0,
+          modelAnswer: q.modelAnswer || undefined,
           explanation: q.explanation || 'تم التحقق من الإجابة النموذجية وفقاً لأحدث المناهج العلمية.',
         }));
 
         if (formattedQuestions.length > 0) {
           return res.json({
             success: true,
+            source: 'gemini',
+            modelUsed,
             quizTitle: parsedData.quizTitle || 'اختبار مستخرج بواسطة Google Gemini AI',
             suggestedDurationMinutes: parsedData.suggestedDurationMinutes || Math.max(15, formattedQuestions.length * 2),
             suggestedTotalMarks: parsedData.suggestedTotalMarks || formattedQuestions.length * 2,
@@ -1056,19 +1304,40 @@ app.post('/api/ai-parse-quiz', async (req, res) => {
         }
       } catch (jsonErr) {
         console.warn('Failed to parse Gemini JSON output:', jsonErr);
+        geminiError = {
+          code: 'UNKNOWN',
+          httpStatus: 502,
+          retryable: true,
+          userMessage: 'استلم النظام رداً غير مكتمل من Gemini أثناء تنسيق JSON. تم تفعيل البديل الآمن، ويمكنك إعادة المحاولة.',
+          rawMessage: String(jsonErr),
+        };
       }
     }
 
-    // Dynamic Multi-Subject Fallback Engine
-    console.log('Generating dynamic multi-subject questions matching request...');
+    // Dynamic Multi-Subject Fallback Engine (never masquerades silently as OCR for uploaded images/PDFs)
+    const fallbackReason = geminiError?.userMessage || 'تعذر الاتصال بمحرك Gemini حالياً.';
+    if (canSendInline && !rawText) {
+      return res.status(geminiError?.httpStatus || 503).json({
+        success: false,
+        source: 'fallback',
+        errorCode: geminiError?.code || 'UNKNOWN',
+        error: `${fallbackReason} لم يتم قراءة محتوى الصورة/الملف تلقائياً — يرجى إعادة المحاولة أو إضافة الأسئلة يدوياً.`,
+        warning: fallbackReason,
+        questions: [],
+      });
+    }
+
     const fallbackData = extractSmartQuestions(grade, instructions, rawText);
     const questionsWithImage = (fallbackData.questions || []).map((q: any) => ({
       ...q,
       image: q.image || questionImageAttachment,
     }));
 
-    return res.json({
+    return res.status(geminiError?.httpStatus || 200).json({
       success: true,
+      source: 'fallback',
+      errorCode: geminiError?.code || 'FALLBACK',
+      warning: `${fallbackReason} تم استخدام المحرك الاحتياطي المحلي لتجهيز الأسئلة.`,
       quizTitle: fallbackData.quizTitle,
       suggestedDurationMinutes: fallbackData.suggestedDurationMinutes,
       suggestedTotalMarks: fallbackData.suggestedTotalMarks,
@@ -1076,18 +1345,19 @@ app.post('/api/ai-parse-quiz', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error in /api/ai-parse-quiz:', err);
-    const safeData = extractSmartQuestions(req.body?.grade, req.body?.instructions, req.body?.rawText);
-    return res.json({
-      success: true,
-      quizTitle: safeData.quizTitle,
-      suggestedDurationMinutes: safeData.suggestedDurationMinutes,
-      suggestedTotalMarks: safeData.suggestedTotalMarks,
-      questions: safeData.questions,
+    const classified = classifyGeminiError(err);
+    return res.status(classified.httpStatus).json({
+      success: false,
+      source: 'fallback',
+      errorCode: classified.code,
+      error: classified.userMessage,
+      warning: classified.userMessage,
+      questions: [],
     });
   }
 });
 
-// AI Batch Student Extractor from image of attendance sheet / Excel / notebook (Google Gemini 3.8 Flash)
+// AI Batch Student Extractor from image of attendance sheet / Excel / notebook (Google Gemini 4 Hydrogen)
 app.post('/api/ai-extract-students', async (req, res) => {
   try {
     const { imageData, mimeType, rawText } = req.body;
@@ -1095,6 +1365,10 @@ app.post('/api/ai-extract-students', async (req, res) => {
     let cleanBase64 = '';
 
     if (imageData && imageData.includes(',')) {
+      if (!mimeType && imageData.startsWith('data:')) {
+        const match = imageData.match(/^data:([^;]+);base64,/);
+        if (match) cleanMimeType = match[1].toLowerCase();
+      }
       cleanBase64 = imageData.split(',')[1];
     } else if (imageData) {
       cleanBase64 = imageData;
@@ -1119,55 +1393,78 @@ app.post('/api/ai-extract-students', async (req, res) => {
 }`;
 
     let extractedStudents: any[] = [];
-    if (cleanBase64 && ai) {
-      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest'];
-      for (const model of candidateModels) {
+    let modelUsed: string | null = null;
+    let lastError: GeminiClassifiedError | null = null;
+
+    const client = getGeminiClient();
+    if ((cleanBase64 || rawText) && client) {
+      const parts: any[] = [];
+      if (cleanBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: cleanMimeType || 'image/jpeg',
+            data: cleanBase64,
+          },
+        });
+      }
+      parts.push({
+        text: rawText
+          ? `استخرج جميع الطلاب من هذا النص/الكشف مع الأسماء والأرقام والأكواد:\n${rawText}`
+          : 'استخرج جميع الطلاب من هذا الكشف مع الأسماء والأرقام والأكواد.',
+      });
+
+      const result = await generateContentWithRetry(client, {
+        contents: parts,
+        timeoutMs: 45000,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+        },
+      });
+
+      modelUsed = result.modelUsed;
+      lastError = result.lastError;
+      if (result.text) {
         try {
-          const aiResp = await ai.models.generateContent({
-            model,
-            contents: [
-              {
-                inlineData: {
-                  mimeType: cleanMimeType,
-                  data: cleanBase64,
-                },
-              },
-              { text: 'استخرج جميع الطلاب من هذا الكشف مع الأسماء والأرقام والأكواد.' },
-            ],
-            config: {
-              systemInstruction,
-              responseMimeType: 'application/json',
-            },
-          });
-          if (aiResp && aiResp.text) {
-            const data = JSON.parse(aiResp.text.trim().replace(/^```json\s*/, '').replace(/```\s*$/, ''));
-            if (Array.isArray(data.students) && data.students.length > 0) {
-              extractedStudents = data.students;
-              break;
-            }
+          const data = JSON.parse(result.text.trim().replace(/^```json\s*/, '').replace(/```\s*$/, ''));
+          if (Array.isArray(data.students) && data.students.length > 0) {
+            extractedStudents = data.students;
           }
-        } catch (e: any) {
-          console.warn(`[AI-Extract] Model ${model} failed:`, e.message?.slice(0, 80));
+        } catch (jsonErr) {
+          console.warn('[AI-Extract] Failed to parse Gemini JSON:', jsonErr);
         }
       }
+    } else if (!client) {
+      lastError = classifyGeminiError(new Error('MISSING_KEY'));
     }
 
     if (extractedStudents.length === 0) {
-      return res.json({
+      return res.status(lastError?.httpStatus || 200).json({
         success: false,
+        source: 'fallback',
+        errorCode: lastError?.code || 'NO_MATCH',
+        error: lastError?.userMessage || 'لم يتم العثور على أرقام أو أسماء في الصورة المرفقة.',
         students: [],
-        message: 'لم يتم العثور على أرقام أو أسماء في الصورة المرفقة. يرجى إرفاق صورة واضحة لكشف الطلاب.',
+        message: lastError?.userMessage || 'لم يتم العثور على أرقام أو أسماء في الصورة المرفقة. يرجى إرفاق صورة واضحة لكشف الطلاب.',
       });
     }
 
     return res.json({
       success: true,
+      source: 'gemini',
+      modelUsed,
       students: extractedStudents,
       message: `تم استخراج ${extractedStudents.length} طالباً بدقة وجاهزون للإضافة في لوحة التصريح!`,
     });
   } catch (err: any) {
     console.error('Error in /api/ai-extract-students:', err);
-    return res.status(500).json({ success: false, error: 'حدث خطأ في استخراج بيانات الطلاب' });
+    const classified = classifyGeminiError(err);
+    return res.status(classified.httpStatus).json({
+      success: false,
+      errorCode: classified.code,
+      error: classified.userMessage,
+      students: [],
+    });
   }
 });
 

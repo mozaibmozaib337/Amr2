@@ -48,12 +48,18 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
       });
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
         setQuestions(data.questions);
-        setRefineNotice('✨ تم تنفيذ التعديلات بنجاح وبدقة كاملة!');
+        setRefineNotice(
+          data.warning
+            ? `⚠️ ${data.warning}`
+            : '✨ تم تنفيذ التعديلات بنجاح وبدقة كاملة!'
+        );
         setAiPrompt('');
-        setTimeout(() => setRefineNotice(null), 3500);
+        setTimeout(() => setRefineNotice(null), 4500);
+      } else {
+        setRefineNotice(`⚠️ ${data.error || data.warning || 'تعذر تنفيذ التعديلات بالذكاء الاصطناعي حالياً.'}`);
       }
     } catch {
-      // Graceful error
+      setRefineNotice('⚠️ حدث خطأ في الاتصال بالخادم أثناء تعديل الأسئلة.');
     } finally {
       setIsRefining(false);
     }

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { usePlatform, ADMIN_EMAIL } from '../context/PlatformContext';
 import {
   Sparkles,
@@ -13,16 +13,18 @@ import {
   Check,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   HelpCircle,
   Trash2,
   FileText,
   Sliders,
   ShieldCheck,
   Zap,
+  Activity,
 } from 'lucide-react';
 import { Question, GradeLevel } from '../types';
 import { QuestionReviewEditor } from './QuestionReviewEditor';
-import { parseQuizWithAiClient } from '../utils/aiClientService';
+import { parseQuizWithAiClient, checkAiHealth, AiHealthStatus } from '../utils/aiClientService';
 
 export const GeminiTeacherDashboard: React.FC = () => {
   const { currentUser, addExam, addHomework, activeGrade } = usePlatform();
@@ -43,12 +45,28 @@ export const GeminiTeacherDashboard: React.FC = () => {
   const [targetGrade, setTargetGrade] = useState<GradeLevel>(activeGrade === 'all' ? 'sec3' : activeGrade);
   const [isLoading, setIsLoading] = useState(false);
   const [aiResponseText, setAiResponseText] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiWarning, setAiWarning] = useState<string | null>(null);
+  const [aiHealth, setAiHealth] = useState<AiHealthStatus | null>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const [generatedQuestions, setGeneratedQuestions] = useState<Question[]>([]);
   const [suggestedTitle, setSuggestedTitle] = useState('امتحان كيمياء ذكي - مستر عمرو السيد');
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isAuthorized) return;
+    checkAiHealth(false).then(setAiHealth);
+  }, [isAuthorized]);
+
+  const handleCheckConnection = async () => {
+    setIsCheckingHealth(true);
+    const status = await checkAiHealth(true);
+    setAiHealth(status);
+    setIsCheckingHealth(false);
+  };
 
   if (!isAuthorized) {
     return (
@@ -70,6 +88,7 @@ export const GeminiTeacherDashboard: React.FC = () => {
 
     setSelectedFile(file);
     setFileMimeType(file.type || 'image/jpeg');
+    setAiError(null);
 
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
@@ -84,12 +103,14 @@ export const GeminiTeacherDashboard: React.FC = () => {
 
   const handleRunGemini = async () => {
     if (!promptText && !selectedFile) {
-      alert('يرجى كتابة أمر لـ Gemini أو إرفاق ملف/صورة كتاب أو شيت');
+      setAiError('يرجى كتابة أمر لـ Gemini أو إرفاق ملف/صورة كتاب أو شيت قبل الإرسال.');
       return;
     }
 
     setIsLoading(true);
-    setAiResponseText('⏳ جاري إرسال الصورة والطلب إلى ذكاء Gemini وتحليلها واستخراج الأسئلة...');
+    setAiError(null);
+    setAiWarning(null);
+    setAiResponseText('⏳ جاري إرسال الصورة والطلب إلى محرك Gemini 4 Hydrogen وتحليلها واستخراج الأسئلة...');
     setSaveSuccessNotice(null);
 
     try {
@@ -110,7 +131,11 @@ export const GeminiTeacherDashboard: React.FC = () => {
         mimeType: fileMimeType,
       });
 
-      if (data.success && Array.isArray(data.questions)) {
+      if (data.warning) {
+        setAiWarning(data.warning);
+      }
+
+      if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
         setSuggestedTitle(data.quizTitle || 'اختبار كيميائي مخصص');
         const qList: Question[] = (data.questions || []).map((q: any, idx: number) => ({
           id: q.id || `q_gemini_${Date.now()}_${idx + 1}`,
@@ -123,17 +148,23 @@ export const GeminiTeacherDashboard: React.FC = () => {
         }));
 
         setGeneratedQuestions(qList);
+        const engineLabel =
+          data.source === 'gemini'
+            ? `محرك Google Gemini (${data.modelUsed || 'gemini-4-hydrogen'})`
+            : 'المحرك الاحتياطي المحلي (بعد تعذر استجابة Gemini)';
         setAiResponseText(
-          `✅ [رد Gemini الذكي]: تم تحليل الصورة/الملف بنجاح بناءً على توجيهاتك!\n\n` +
+          `✅ [رد النظام]: تم تجهيز الأسئلة بنجاح عبر ${engineLabel}!\n\n` +
           `• عدد الأسئلة المستخرجة: ${qList.length} سؤال\n` +
           `• عنوان التقييم المقترح: ${data.quizTitle}\n` +
           `• جاهز الآن للحفظ المباشر كـ امتحان إلكتروني أو واجب في قاعدة البيانات الدائمة.`
         );
       } else {
-        setAiResponseText(`✅ تم استقبال رد Gemini: تم تنفيذ الأمر وتجهيز بنك الأسئلة وفق تعليماتك.`);
+        setAiError(data.error || data.warning || 'تعذر استخراج الأسئلة حالياً. يرجى المحاولة مرة أخرى.');
+        setAiResponseText(null);
       }
     } catch (err: any) {
-      setAiResponseText('حدث خطأ أثناء معالجة الطلب: ' + err.message);
+      setAiError('حدث خطأ غير متوقع أثناء معالجة الطلب: ' + (err?.message || 'خطأ في الاتصال'));
+      setAiResponseText(null);
     } finally {
       setIsLoading(false);
     }
@@ -226,7 +257,7 @@ export const GeminiTeacherDashboard: React.FC = () => {
                 <span>لوحة حصرية للمعلم والسكرتارية فقط</span>
               </span>
               <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-mono">
-                Gemini 3.8 Flash SDK
+                Gemini 4 Hydrogen SDK
               </span>
             </div>
             <h2 className="text-xl md:text-2xl font-extrabold text-white flex items-center gap-2 mt-2">
@@ -238,13 +269,45 @@ export const GeminiTeacherDashboard: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 self-start md:self-auto shrink-0">
             <div className="p-2.5 bg-black/40 rounded-2xl border border-amber-500/30 flex items-center gap-2 text-xs">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span className="text-slate-300 font-medium">سنة 2026 · متصل بقاعدة البيانات السحابية</span>
+              <span className="text-slate-300 font-medium">نموذج نشط: {aiHealth?.activeModel || aiHealth?.primaryModel || 'gemini-4-hydrogen'}</span>
             </div>
+            <button
+              type="button"
+              onClick={handleCheckConnection}
+              disabled={isCheckingHealth}
+              className="px-3 py-2.5 bg-cyan-950/70 hover:bg-cyan-900/80 border border-cyan-500/40 rounded-2xl text-xs font-bold text-cyan-200 flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-60"
+            >
+              <Activity className={`w-3.5 h-3.5 ${isCheckingHealth ? 'animate-spin' : ''}`} />
+              <span>{isCheckingHealth ? 'جاري الفحص...' : 'فحص اتصال Gemini'}</span>
+            </button>
           </div>
         </div>
+
+        {/* Live AI Health Bar */}
+        {aiHealth && (
+          <div
+            className={`mt-4 px-3.5 py-2.5 rounded-2xl border text-xs flex flex-wrap items-center justify-between gap-2 ${
+              aiHealth.healthy
+                ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-200'
+                : 'bg-red-950/50 border-red-500/40 text-red-200'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {aiHealth.healthy ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              )}
+              <span>{aiHealth.message}</span>
+            </div>
+            <span className="text-[11px] opacity-80 font-mono">
+              الأساسي: {aiHealth.primaryModel} | الاحتياطي: {aiHealth.fallbackModel}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Quick Manual Question Creator Banner (بدون الحاجة للذكاء الاصطناعي) */}
@@ -413,6 +476,36 @@ export const GeminiTeacherDashboard: React.FC = () => {
             </>
           )}
         </button>
+
+        {/* Error Alert Banner with Retry */}
+        {aiError && (
+          <div className="p-4 bg-red-950/60 border border-red-500/50 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-red-200 animate-fade-in">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-red-100">تعذر تنفيذ الطلب عبر Gemini API</p>
+                <p className="leading-relaxed">{aiError}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleRunGemini}
+              disabled={isLoading}
+              className="px-3.5 py-2 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl shrink-0 flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>إعادة المحاولة الآن</span>
+            </button>
+          </div>
+        )}
+
+        {/* Fallback / Rate-Limit Warning Banner */}
+        {aiWarning && !aiError && (
+          <div className="p-3.5 bg-amber-950/50 border border-amber-500/40 rounded-2xl flex items-start gap-2.5 text-xs text-amber-200 animate-fade-in">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{aiWarning}</p>
+          </div>
+        )}
 
         {/* Live Response Box */}
         {aiResponseText && (

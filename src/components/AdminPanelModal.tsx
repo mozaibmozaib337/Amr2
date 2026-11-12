@@ -648,6 +648,9 @@ export const AdminPanelModal: React.FC = () => {
 
     try {
       const data = await chatWithAiClient(textToSend, 'homework');
+      if (data.warning) {
+        showNotice(`⚠️ ${data.warning}`);
+      }
       const reply = data.reply || 'علم يا مستر عمرو! استلمت توجيهاتك وسأنفذها بالحرف الواحد عند استخراج وتوليد الأسئلة ⚡.';
 
       setHwChatMessages((prev) => [
@@ -695,6 +698,9 @@ export const AdminPanelModal: React.FC = () => {
 
     try {
       const data = await chatWithAiClient(textToSend, 'exam');
+      if (data.warning) {
+        showNotice(`⚠️ ${data.warning}`);
+      }
       const reply = data.reply || 'تم تسجيل توجيهات الامتحان يا مستر عمرو! سأنفذها بالحرف الواحد عند بدء الاستخراج ⚡.';
 
       setExamChatMessages((prev) => [
@@ -741,18 +747,34 @@ export const AdminPanelModal: React.FC = () => {
         if (!hwTitle && data.quizTitle) {
           setHwTitle(data.quizTitle);
         }
-        showNotice(`✨ استخرج Google Gemini AI ${data.questions.length} سؤال بنجاح فائق ودقة تامة!`);
+        showNotice(
+          data.warning
+            ? `⚠️ ${data.warning}`
+            : `✨ استخرج Google Gemini AI ${data.questions.length} سؤال بنجاح فائق ودقة تامة!`
+        );
         setHwChatMessages((prev) => [
           ...prev,
           {
             id: `ai_${Date.now()}`,
             sender: 'ai',
-            text: `تم استخراج وتوليد ${data.questions.length} سؤال بنجاح بالحرف الواحد وفقاً لتوجيهاتك! راجع الأسئلة في المحرر أدناه، مع الخيارات والإجابات النموذجية.`,
+            text: data.warning
+              ? `⚠️ ${data.warning} (تم تجهيز ${data.questions.length} سؤال بالمحرك الاحتياطي للمراجعة)`
+              : `تم استخراج وتوليد ${data.questions.length} سؤال بنجاح بالحرف الواحد وفقاً لتوجيهاتك! راجع الأسئلة في المحرر أدناه، مع الخيارات والإجابات النموذجية.`,
             time: 'الآن',
           },
         ]);
       } else {
-        showNotice(data.error || 'تعذر استخراج الأسئلة بواسطة Google Gemini.');
+        const errMsg = data.error || data.warning || 'تعذر استخراج الأسئلة بواسطة Google Gemini.';
+        showNotice(`⚠️ ${errMsg}`);
+        setHwChatMessages((prev) => [
+          ...prev,
+          {
+            id: `ai_${Date.now()}`,
+            sender: 'ai',
+            text: `⚠️ ${errMsg}`,
+            time: 'الآن',
+          },
+        ]);
       }
     } catch (err: any) {
       console.error('Gemini Parse error:', err);
@@ -790,18 +812,34 @@ export const AdminPanelModal: React.FC = () => {
         if (data.suggestedTotalMarks) {
           setExamMarks(String(data.suggestedTotalMarks));
         }
-        showNotice(`✨ تم استخراج وصياغة ${data.questions.length} سؤال للامتحان بواسطة Google Gemini بدقة فائقة!`);
+        showNotice(
+          data.warning
+            ? `⚠️ ${data.warning}`
+            : `✨ تم استخراج وصياغة ${data.questions.length} سؤال للامتحان بواسطة Google Gemini بدقة فائقة!`
+        );
         setExamChatMessages((prev) => [
           ...prev,
           {
             id: `ai_${Date.now()}`,
             sender: 'ai',
-            text: `تم توليد وصياغة ${data.questions.length} سؤال للامتحان بواسطة Google Gemini وفقاً لتوجيهاتك بالحرف الواحد! راجع الإجابات النموذجية ودرجات كل سؤال أدناه.`,
+            text: data.warning
+              ? `⚠️ ${data.warning} (تم تجهيز ${data.questions.length} سؤال بالمحرك الاحتياطي للمراجعة)`
+              : `تم توليد وصياغة ${data.questions.length} سؤال للامتحان بواسطة Google Gemini وفقاً لتوجيهاتك بالحرف الواحد! راجع الإجابات النموذجية ودرجات كل سؤال أدناه.`,
             time: 'الآن',
           },
         ]);
       } else {
-        showNotice(data.error || 'تعذر استخراج الأسئلة بواسطة Google Gemini.');
+        const errMsg = data.error || data.warning || 'تعذر استخراج الأسئلة بواسطة Google Gemini.';
+        showNotice(`⚠️ ${errMsg}`);
+        setExamChatMessages((prev) => [
+          ...prev,
+          {
+            id: `ai_${Date.now()}`,
+            sender: 'ai',
+            text: `⚠️ ${errMsg}`,
+            time: 'الآن',
+          },
+        ]);
       }
     } catch (err: any) {
       console.error('Gemini Exam Parse error:', err);
@@ -829,9 +867,13 @@ export const AdminPanelModal: React.FC = () => {
         if (!examTitle && data.quizTitle) {
           setExamTitle(data.quizTitle);
         }
-        showNotice(`✨ قام مساعد Google Gemini بصياغة وتنسيق ${data.questions.length} سؤال للامتحان بنجاح!`);
+        showNotice(
+          data.warning
+            ? `⚠️ ${data.warning}`
+            : `✨ قام مساعد Google Gemini بصياغة وتنسيق ${data.questions.length} سؤال للامتحان بنجاح!`
+        );
       } else {
-        showNotice(data.error || 'تعذر معالجة النص.');
+        showNotice(`⚠️ ${data.error || data.warning || 'تعذر معالجة النص.'}`);
       }
     } catch (err: any) {
       console.error(err);
@@ -1261,8 +1303,8 @@ export const AdminPanelModal: React.FC = () => {
       setIsBatchAiModalOpen(true);
 
       try {
-        const data = await extractStudentsWithAiClient();
-        if (data.success && Array.isArray(data.students)) {
+        const data = await extractStudentsWithAiClient(undefined, dataUrl, file.type);
+        if (data.success && Array.isArray(data.students) && data.students.length > 0) {
           setBatchExtractedStudents(
             data.students.map((s: any) => ({
               studentName: s.studentName || 'طالب جديد',
@@ -1273,7 +1315,7 @@ export const AdminPanelModal: React.FC = () => {
           );
           showNotice(`نجح Google Gemini AI في استخراج ${data.students.length} طالب من الصورة بدقة 100%!`);
         } else {
-          showNotice('تم وضع بيانات الطلاب للمراجعة والتأكيد');
+          showNotice(`⚠️ ${data.error || data.message || 'تعذر استخراج بيانات الطلاب من الصورة'}`);
         }
       } catch (err) {
         console.error('Batch extraction error:', err);
