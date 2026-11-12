@@ -10,6 +10,8 @@ import {
   Sliders,
   Bot,
   Sparkles,
+  ClipboardList,
+  Medal,
 } from 'lucide-react';
 import { usePlatform, ADMIN_EMAIL } from '../context/PlatformContext';
 
@@ -61,6 +63,20 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
       label: 'الواجبات والشيتات',
       icon: BookCheck,
     },
+    {
+      id: 'top_rankings',
+      label: 'أوائل الشيتات والامتحانات',
+      icon: Medal,
+    },
+    ...(isAdminOrSec
+      ? [
+          {
+            id: 'student_data',
+            label: 'بيانات الطالب والتقارير',
+            icon: ClipboardList,
+          },
+        ]
+      : []),
     {
       id: 'wallet',
       label: 'محفظتي وكود الشحن',

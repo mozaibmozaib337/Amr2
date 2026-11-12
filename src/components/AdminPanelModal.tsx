@@ -66,6 +66,9 @@ import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient, r
 import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials } from '../services/supabaseService';
 import { Database, Link2 } from 'lucide-react';
 import { parseYouTubeUrl, parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
+import { TopRankingsDirectorySection } from './TopRankingsDirectorySection';
+import { StudentDirectorySection } from './StudentDirectorySection';
+import { buildWhatsAppUrl, openExternalSafe } from '../utils/safeExternalLink';
 
 
 
@@ -130,7 +133,6 @@ export const AdminPanelModal: React.FC = () => {
     studentAccessMap,
     studentActivities,
     examSubmissions,
-    getExamRankings,
     getStudentDossier,
     teacherProfile,
     updateTeacherProfile,
@@ -171,8 +173,8 @@ export const AdminPanelModal: React.FC = () => {
     | 'supabase'
   >('videos');
 
-  // Full Student Management State (Add, Edit, Delete, Filter)
-  const [studentSectionMode, setStudentSectionMode] = useState<'directory' | 'lecture_auth' | 'ai_scan'>('directory');
+  // Full Student Management State (Add, Edit, Delete, Filter, Reports)
+  const [studentSectionMode, setStudentSectionMode] = useState<'directory' | 'reports' | 'lecture_auth' | 'ai_scan'>('directory');
   const [showAddStudentForm, setShowAddStudentForm] = useState(false);
   const [newStdName, setNewStdName] = useState('');
   const [newStdPhone, setNewStdPhone] = useState('');
@@ -207,9 +209,6 @@ export const AdminPanelModal: React.FC = () => {
   const [radarStdSubscription, setRadarStdSubscription] = useState<SubscriptionType>('course');
   const [radarStdGov, setRadarStdGov] = useState('القاهرة');
   const [radarStdAge, setRadarStdAge] = useState('18');
-
-  // Exam Rankings State
-  const [selectedRankingExamId, setSelectedRankingExamId] = useState<string>('');
 
   // Broadcast Message Form State
   const [notifTitle, setNotifTitle] = useState('');
@@ -271,11 +270,15 @@ export const AdminPanelModal: React.FC = () => {
   const [claudePaymentAnswer, setClaudePaymentAnswer] = useState<string | null>(null);
   const [isAskingClaudePayment, setIsAskingClaudePayment] = useState(false);
 
-  // Homework Form (from Local Device Files + Claude 3.5 Sonnet AI Question Extractor)
+  // Homework & Sheet Form (from Local Device Files + Gemini AI Question Extractor)
   const [hwTitle, setHwTitle] = useState('');
+  const [hwKind, setHwKind] = useState<'homework' | 'sheet'>('homework');
+  const [hwLessonTitle, setHwLessonTitle] = useState('');
   const [hwGrade, setHwGrade] = useState<GradeLevel>('sec3');
   const [hwDesc, setHwDesc] = useState('');
   const [hwDeadline, setHwDeadline] = useState('');
+  const [hwDuration, setHwDuration] = useState('1440');
+  const [hwTotalMarks, setHwTotalMarks] = useState('10');
   const [hwFileObj, setHwFileObj] = useState<File | null>(null);
   const [hwFileUrl, setHwFileUrl] = useState('');
   const [hwFileType, setHwFileType] = useState<'pdf' | 'doc' | 'docx' | 'xls' | 'xlsx' | 'image'>('pdf');
@@ -313,6 +316,7 @@ export const AdminPanelModal: React.FC = () => {
 
   // Exam Form (Bulk up to 500 questions + Google Gemini AI extraction)
   const [examTitle, setExamTitle] = useState('');
+  const [examLessonTitle, setExamLessonTitle] = useState('');
   const [examGrade, setExamGrade] = useState<GradeLevel>('sec3');
   const [examDuration, setExamDuration] = useState('45');
   const [examMarks, setExamMarks] = useState('60');
@@ -1318,16 +1322,29 @@ export const AdminPanelModal: React.FC = () => {
     }
   };
 
-  // Add Homework
+  // Add Homework / Sheet
   const handleAddHomework = (e: React.FormEvent) => {
     e.preventDefault();
     if (!hwTitle.trim()) return;
 
+    const maxAllowed = hwKind === 'sheet' ? 180 : 1440;
+    const rawDuration = Number(hwDuration) || maxAllowed;
+    const finalDuration = Math.min(maxAllowed, Math.max(5, rawDuration));
+    const sumQuestionPoints = hwExtractedQuestions.reduce((acc, q) => acc + (q.points ?? 1), 0);
+    const finalMarks =
+      hwExtractedQuestions.length > 0 && hwExtractedQuestions.some((q) => q.points !== undefined)
+        ? sumQuestionPoints
+        : Number(hwTotalMarks) || (hwExtractedQuestions.length > 0 ? sumQuestionPoints : 10);
+
     addHomework({
-      title: hwTitle,
+      title: hwTitle.trim(),
+      kind: hwKind,
+      lessonTitle: hwLessonTitle.trim() || undefined,
       grade: hwGrade,
       description: hwDesc,
       deadline: hwDeadline || 'نهاية الأسبوع',
+      durationMinutes: finalDuration,
+      totalMarks: finalMarks,
       fileUrl: hwFileUrl || undefined,
       fileName: hwFileObj?.name || undefined,
       fileType: hwFileType,
@@ -1335,12 +1352,15 @@ export const AdminPanelModal: React.FC = () => {
     });
 
     setHwTitle('');
+    setHwLessonTitle('');
     setHwDesc('');
     setHwDeadline('');
+    setHwDuration(hwKind === 'sheet' ? '180' : '1440');
+    setHwTotalMarks('10');
     setHwFileObj(null);
     setHwFileUrl('');
     setHwExtractedQuestions([]);
-    showNotice('تم نشر الواجب والشيت للطلاب بنجاح!');
+    showNotice(hwKind === 'sheet' ? 'تم نشر شيت الدرس للطلاب بنجاح!' : 'تم نشر الواجب للطلاب بنجاح!');
   };
 
   // Add File
@@ -1413,20 +1433,29 @@ export const AdminPanelModal: React.FC = () => {
     }
   };
 
-  // Add Exam (with bulk questions)
+  // Add Exam (with bulk questions, max 4 hours = 240 min)
   const handleAddExam = (e: React.FormEvent) => {
     e.preventDefault();
     if (!examTitle.trim()) return;
 
+    const finalDuration = Math.min(240, Math.max(5, Number(examDuration) || 45));
+    const sumQuestionPoints = examQuestions.reduce((acc, q) => acc + (q.points ?? 1), 0);
+    const finalMarks =
+      examQuestions.length > 0 && examQuestions.some((q) => q.points !== undefined)
+        ? sumQuestionPoints
+        : Number(examMarks) || (examQuestions.length > 0 ? sumQuestionPoints : 60);
+
     addExam({
-      title: examTitle,
+      title: examTitle.trim(),
+      lessonTitle: examLessonTitle.trim() || undefined,
       grade: examGrade,
-      durationMinutes: Number(examDuration) || 45,
-      totalMarks: Number(examMarks) || 60,
+      durationMinutes: finalDuration,
+      totalMarks: finalMarks,
       questions: examQuestions,
     });
 
     setExamTitle('');
+    setExamLessonTitle('');
     setExamQuestions([]);
     setRawQuestionsText('');
     showNotice(`تم نشر الامتحان الإلكتروني بنجاح مع ${examQuestions.length} سؤال!`);
@@ -2299,14 +2328,13 @@ export const AdminPanelModal: React.FC = () => {
                                   onClick={() => {
                                     const dossier = getStudentDossier(st.id);
                                     if (!dossier) return;
-                                    const msg = encodeURIComponent(
+                                    const msg =
                                       `السلام عليكم ورحمة الله وبركاته،\nولي أمر الطالب المحترم: ${st.name} (${st.studentCode})\n\nنود إحاطتكم بتقرير المتابعة والأداء الأكاديمي الشامل في مادة الكيمياء مع مستر عمرو السيد:\n\n` +
                                       `📌 نسبة حضور المحاضرات: ${dossier.attendanceRate}% (${dossier.enteredLectures} من ${dossier.totalLectures})\n` +
                                       `📌 متوسط درجات الاختبارات: ${dossier.averageExamScore}%\n` +
                                       `📌 نسبة تسليم الواجبات: ${dossier.homeworkCompletionRate}%\n\n` +
-                                      `نتمنى له دوام التفوق والنجاح دائماً! 🧪✨`
-                                    );
-                                    window.open(`https://wa.me/2${parentPhone}?text=${msg}`, '_blank');
+                                      `نتمنى له دوام التفوق والنجاح دائماً! 🧪✨`;
+                                    openExternalSafe(buildWhatsAppUrl(parentPhone, msg));
                                   }}
                                   className="p-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 rounded-lg border border-emerald-500/30 text-[11px] font-bold cursor-pointer transition-colors"
                                   title="إرسال التقرير لولي الأمر عبر واتساب"
@@ -2491,14 +2519,13 @@ export const AdminPanelModal: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const msg = encodeURIComponent(
+                              const msg =
                                 `السلام عليكم ورحمة الله وبركاته،\nولي أمر الطالب المحترم: ${dossier.student.name} (${dossier.student.studentCode})\n\nتقرير المتابعة والأداء الأكاديمي الشامل في مادة الكيمياء مع مستر عمرو السيد:\n\n` +
                                 `📌 نسبة حضور المحاضرات: ${dossier.attendanceRate}% (${dossier.enteredLectures} من ${dossier.totalLectures})\n` +
                                 `📌 متوسط درجات الامتحانات: ${dossier.averageExamScore}%\n` +
                                 `📌 نسبة تسليم الواجبات: ${dossier.homeworkCompletionRate}%\n\n` +
-                                `مع تحيات مستر عمرو السيد وفريق العمل 🧪✨`
-                              );
-                              window.open(`https://wa.me/2${parentPhone}?text=${msg}`, '_blank');
+                                `مع تحيات مستر عمرو السيد وفريق العمل 🧪✨`;
+                              openExternalSafe(buildWhatsAppUrl(parentPhone, msg));
                             }}
                             className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/30 cursor-pointer"
                           >
@@ -2514,125 +2541,10 @@ export const AdminPanelModal: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 0.2: EXAM TOP SCORES RANKINGS (تفنيد أعلى الدرجات بالترتيب من الأعلى للأقل) */}
+          {/* TAB 0.2: TOP RANKINGS OF SHEETS & EXAMS */}
           {activeTab === 'exam_rankings' && (
-            <div className="space-y-6 animate-fade-in">
-              <div className="p-4 rounded-xl bg-[#080d1b] border border-cyan-900/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Trophy className="w-5 h-5 text-amber-400" />
-                    <span>تفنيد أعلى الدرجات وترتيب الأوائل في الامتحانات</span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    تفنيط وترتيب الطلاب من المركز الأول والأعلى درجة إلى الأقل مع الميداليات والتوقيت المستغرق.
-                  </p>
-                </div>
-
-                {/* Exam Picker Dropdown */}
-                {exams.length > 0 && (
-                  <select
-                    value={selectedRankingExamId || exams[0]?.id}
-                    onChange={(e) => setSelectedRankingExamId(e.target.value)}
-                    className="bg-[#050811] border border-cyan-700/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-bold"
-                  >
-                    {exams.map((ex) => (
-                      <option key={ex.id} value={ex.id}>
-                        {ex.title} (الدرجة الكلية: {ex.totalMarks})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              {exams.length === 0 ? (
-                <div className="p-12 text-center bg-[#080d1b] rounded-2xl border border-slate-800 text-slate-400 text-xs">
-                  لا توجد امتحانات منشورة حالياً لتفنيد درجاتها.
-                </div>
-              ) : (() => {
-                const currentExamId = selectedRankingExamId || exams[0]?.id;
-                const rankings = getExamRankings(currentExamId);
-
-                return (
-                  <div className="space-y-3">
-                    {rankings.length === 0 ? (
-                      <div className="p-10 text-center bg-[#080d1b] rounded-2xl border border-slate-800 text-slate-400 text-xs">
-                        لا توجد نتائج مسجلة لهذا الامتحان حتى الآن. ستظهر درجات الطلاب مرتبة من الأعلى للأقل فور إجرائهم للامتحان.
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {rankings.map((sub, index) => {
-                          const isGold = index === 0;
-                          const isSilver = index === 1;
-                          const isBronze = index === 2;
-
-                          return (
-                            <div
-                              key={sub.id}
-                              className={`p-3.5 rounded-xl border flex items-center justify-between text-xs transition-all ${
-                                isGold
-                                  ? 'bg-gradient-to-r from-amber-500/15 via-[#0b1428] to-amber-500/10 border-amber-500/50 shadow-md shadow-amber-500/10'
-                                  : isSilver
-                                  ? 'bg-gradient-to-r from-slate-400/10 via-[#0b1428] to-slate-400/5 border-slate-400/40'
-                                  : isBronze
-                                  ? 'bg-gradient-to-r from-amber-700/10 via-[#0b1428] to-amber-700/5 border-amber-700/40'
-                                  : 'bg-[#080d1b] border-slate-800 hover:border-cyan-900/60'
-                              }`}
-                            >
-                              <div className="flex items-center gap-3">
-                                <div
-                                  className={`w-9 h-9 rounded-xl flex items-center justify-center font-black font-mono text-sm shrink-0 ${
-                                    isGold
-                                      ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30 ring-2 ring-amber-300'
-                                      : isSilver
-                                      ? 'bg-slate-300 text-black shadow-md'
-                                      : isBronze
-                                      ? 'bg-amber-700 text-white shadow-md'
-                                      : 'bg-slate-800 text-slate-300'
-                                  }`}
-                                >
-                                  {isGold ? '🥇 1' : isSilver ? '🥈 2' : isBronze ? '🥉 3' : `${index + 1}`}
-                                </div>
-
-                                <div>
-                                  <h4 className="font-bold text-white text-sm flex items-center gap-2">
-                                    <span>{sub.studentName}</span>
-                                    {isGold && (
-                                      <span className="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
-                                        الأول على الدفعة 🌟
-                                      </span>
-                                    )}
-                                  </h4>
-                                  <p className="text-[11px] text-slate-400 font-mono">
-                                    الكود: {sub.studentCode} | هاتف: {sub.studentPhone}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-4">
-                                <div className="text-left font-mono">
-                                  <span className="text-base font-extrabold text-amber-300">
-                                    {sub.score} / {sub.maxScore}
-                                  </span>
-                                  <p className="text-[10px] text-slate-400">
-                                    النسبة: {sub.percentage}% · الوقت: {sub.timeSpentMinutes} دقيقة
-                                  </p>
-                                </div>
-
-                                <button
-                                  onClick={() => setSelectedStudentForDossier(sub.studentId)}
-                                  className="px-2.5 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-[11px] font-bold border border-cyan-500/30 cursor-pointer"
-                                >
-                                  الملف 👤
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+            <div className="animate-fade-in">
+              <TopRankingsDirectorySection />
             </div>
           )}
 
@@ -3180,19 +3092,50 @@ export const AdminPanelModal: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs text-slate-300 mb-1">عنوان الواجب</label>
+                    <label className="block text-xs text-slate-300 mb-1">تصنيف التكليف</label>
+                    <select
+                      value={hwKind}
+                      onChange={(e) => {
+                        const nextKind = e.target.value as 'homework' | 'sheet';
+                        setHwKind(nextKind);
+                        setHwDuration(nextKind === 'sheet' ? '180' : '1440');
+                      }}
+                      className="w-full bg-[#050811] border border-cyan-700/60 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-cyan-400"
+                    >
+                      <option value="homework">واجب منزلي (مهلة حتى يوم كامل 24 ساعة)</option>
+                      <option value="sheet">شيت درس (حد أقصى 3 ساعات + يدخل الأوائل)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">
+                      {hwKind === 'sheet' ? 'عنوان الشيت' : 'عنوان الواجب'}
+                    </label>
                     <input
                       type="text"
                       required
                       value={hwTitle}
                       onChange={(e) => setHwTitle(e.target.value)}
-                      placeholder="مثال: واجب الأسبوع الأول: التوزيع الإلكتروني"
+                      placeholder={hwKind === 'sheet' ? 'مثال: شيت الدرس الأول - العناصر الانتقالية' : 'مثال: واجب الأسبوع الأول: التوزيع الإلكتروني'}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
                     />
                   </div>
 
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">الدرس المرتبط (مثال: الدرس الأول)</label>
+                    <input
+                      type="text"
+                      value={hwLessonTitle}
+                      onChange={(e) => setHwLessonTitle(e.target.value)}
+                      placeholder="مثال: الدرس الأول - الباب الأول"
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div>
                     <label className="block text-xs text-slate-300 mb-1">الصف الدراسي</label>
                     <select
@@ -3205,24 +3148,50 @@ export const AdminPanelModal: React.FC = () => {
                       <option value="sec1">الصف الأول الثانوي</option>
                     </select>
                   </div>
-                </div>
 
-                <div>
-                  <label className="block text-xs text-slate-300 mb-1">آخر موعد للتسليم</label>
-                  <input
-                    type="text"
-                    value={hwDeadline}
-                    onChange={(e) => setHwDeadline(e.target.value)}
-                    placeholder="مثال: يوم الخميس الساعة 11 مساءً"
-                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
-                  />
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">
+                      مدة الحل (دقيقة · حد أقصى {hwKind === 'sheet' ? '180 د = 3 ساعات' : '1440 د = يوم كامل'})
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={hwKind === 'sheet' ? 180 : 1440}
+                      value={hwDuration}
+                      onChange={(e) => setHwDuration(e.target.value)}
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none text-left font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">الدرجة الكلية</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={hwTotalMarks}
+                      onChange={(e) => setHwTotalMarks(e.target.value)}
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none text-left font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">آخر موعد للتسليم</label>
+                    <input
+                      type="text"
+                      value={hwDeadline}
+                      onChange={(e) => setHwDeadline(e.target.value)}
+                      placeholder="مثال: يوم الخميس الساعة 11 مساءً"
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                    />
+                  </div>
                 </div>
 
                 {/* Extracted Questions Review & Teacher Correct Answer Picker */}
                 <QuestionReviewEditor
                   questions={hwExtractedQuestions}
                   setQuestions={setHwExtractedQuestions}
-                  titleLabel="الأسئلة المستخرجة للواجب والشيت"
+                  titleLabel={hwKind === 'sheet' ? 'مراجعة وتعديل أسئلة الشيت وتوزيع الدرجات' : 'الأسئلة المستخرجة للواجب'}
+                  onTotalPointsChange={(total) => setHwTotalMarks(String(total))}
                 />
 
 
@@ -3231,7 +3200,7 @@ export const AdminPanelModal: React.FC = () => {
                   className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs rounded-xl transition-all shadow-md cursor-pointer flex items-center gap-2"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  <span>حفظ ونشر الواجب</span>
+                  <span>{hwKind === 'sheet' ? 'حفظ ونشر الشيت' : 'حفظ ونشر الواجب'}</span>
                 </button>
               </form>
 
@@ -3253,8 +3222,24 @@ export const AdminPanelModal: React.FC = () => {
                         className="p-3.5 bg-[#080d1b] border border-slate-800 rounded-xl flex items-center justify-between text-xs"
                       >
                         <div>
-                          <h5 className="font-bold text-white">{hw.title}</h5>
-                          <p className="text-slate-400 text-[11px]">{hw.deadline} · {hw.fileName || 'شيت مرفق'}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                hw.kind === 'sheet'
+                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                  : 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
+                              }`}
+                            >
+                              {hw.kind === 'sheet' ? 'شيت درس' : 'واجب منزلي'}
+                            </span>
+                            <h5 className="font-bold text-white">{hw.title}</h5>
+                            {hw.lessonTitle && (
+                              <span className="text-[11px] text-cyan-300 font-semibold">({hw.lessonTitle})</span>
+                            )}
+                          </div>
+                          <p className="text-slate-400 text-[11px] mt-0.5">
+                            {hw.deadline} · المدة: {hw.durationMinutes || (hw.kind === 'sheet' ? 180 : 1440)} د · {hw.questions ? `${hw.questions.length} سؤال` : hw.fileName || 'شيت مرفق'}
+                          </p>
                         </div>
                         <div className="flex items-center gap-2">
                           {hw.fileUrl && (
@@ -3308,7 +3293,7 @@ export const AdminPanelModal: React.FC = () => {
                   </h3>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div className="sm:col-span-2">
                     <label className="block text-xs text-slate-300 mb-1">عنوان الامتحان</label>
                     <input
@@ -3317,6 +3302,17 @@ export const AdminPanelModal: React.FC = () => {
                       value={examTitle}
                       onChange={(e) => setExamTitle(e.target.value)}
                       placeholder="مثال: الامتحان الشامل على الباب الأول والثاني"
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">الدرس / الباب المرتبط</label>
+                    <input
+                      type="text"
+                      value={examLessonTitle}
+                      onChange={(e) => setExamLessonTitle(e.target.value)}
+                      placeholder="مثال: الباب الأول كاملاً"
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
                     />
                   </div>
@@ -3337,9 +3333,11 @@ export const AdminPanelModal: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-slate-300 mb-1">مدة الامتحان بالدقائق</label>
+                    <label className="block text-xs text-slate-300 mb-1">مدة الامتحان بالدقائق (حد أقصى 240 دقيقة / 4 ساعات)</label>
                     <input
                       type="number"
+                      min={5}
+                      max={240}
                       value={examDuration}
                       onChange={(e) => setExamDuration(e.target.value)}
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none text-left font-mono"
@@ -3672,6 +3670,7 @@ export const AdminPanelModal: React.FC = () => {
                   questions={examQuestions}
                   setQuestions={setExamQuestions}
                   titleLabel="مراجعة وتعديل أسئلة الامتحان"
+                  onTotalPointsChange={(total) => setExamMarks(String(total))}
                 />
 
                 <button
@@ -3950,7 +3949,7 @@ export const AdminPanelModal: React.FC = () => {
               <div className="space-y-6">
                 {/* Mode Switcher */}
                 <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-[#080d1b] border border-cyan-900/40 rounded-2xl">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
                       onClick={() => setStudentSectionMode('directory')}
@@ -3962,6 +3961,19 @@ export const AdminPanelModal: React.FC = () => {
                     >
                       <Users className="w-4 h-4" />
                       <span>دليل الطلاب (إضافة / تعديل / حذف)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setStudentSectionMode('reports')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                        studentSectionMode === 'reports'
+                          ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                          : 'text-emerald-300 hover:text-white hover:bg-emerald-950/40'
+                      }`}
+                    >
+                      <Activity className="w-4 h-4" />
+                      <span>بيانات الطالب والتقارير الشاملة</span>
                     </button>
 
                     <button
@@ -4709,6 +4721,13 @@ export const AdminPanelModal: React.FC = () => {
                         </div>
                       )}
                     </div>
+                  </div>
+                )}
+
+                {/* Sub-view: Comprehensive Student Reports */}
+                {studentSectionMode === 'reports' && (
+                  <div className="animate-fade-in">
+                    <StudentDirectorySection />
                   </div>
                 )}
 
@@ -6417,7 +6436,26 @@ export const AdminPanelModal: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-              <div className="sm:col-span-2">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">تصنيف التكليف</label>
+                <select
+                  value={editingHomework.kind || 'homework'}
+                  onChange={(e) => {
+                    const nextKind = e.target.value as 'homework' | 'sheet';
+                    setEditingHomework({
+                      ...editingHomework,
+                      kind: nextKind,
+                      durationMinutes: nextKind === 'sheet' ? Math.min(180, editingHomework.durationMinutes || 180) : editingHomework.durationMinutes || 1440,
+                    });
+                  }}
+                  className="w-full bg-[#050811] border border-cyan-700/60 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 font-bold"
+                >
+                  <option value="homework">واجب منزلي (مهلة 24 ساعة)</option>
+                  <option value="sheet">شيت درس (حد أقصى 3 ساعات)</option>
+                </select>
+              </div>
+
+              <div>
                 <label className="block text-slate-300 font-semibold mb-1">عنوان الواجب أو الشيت</label>
                 <input
                   type="text"
@@ -6427,6 +6465,19 @@ export const AdminPanelModal: React.FC = () => {
                 />
               </div>
 
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">الدرس المرتبط</label>
+                <input
+                  type="text"
+                  value={editingHomework.lessonTitle || ''}
+                  onChange={(e) => setEditingHomework({ ...editingHomework, lessonTitle: e.target.value })}
+                  placeholder="مثال: الدرس الأول"
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">الصف الدراسي</label>
                 <select
@@ -6439,16 +6490,45 @@ export const AdminPanelModal: React.FC = () => {
                   <option value="sec1">الصف الأول الثانوي</option>
                 </select>
               </div>
-            </div>
 
-            <div className="text-xs">
-              <label className="block text-slate-300 font-semibold mb-1">آخر موعد للتسليم</label>
-              <input
-                type="text"
-                value={editingHomework.deadline}
-                onChange={(e) => setEditingHomework({ ...editingHomework, deadline: e.target.value })}
-                className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
-              />
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  مدة الحل (حد أقصى {editingHomework.kind === 'sheet' ? '180 د' : '1440 د'})
+                </label>
+                <input
+                  type="number"
+                  min={5}
+                  max={editingHomework.kind === 'sheet' ? 180 : 1440}
+                  value={editingHomework.durationMinutes ?? (editingHomework.kind === 'sheet' ? 180 : 1440)}
+                  onChange={(e) => {
+                    const cap = editingHomework.kind === 'sheet' ? 180 : 1440;
+                    const val = Math.min(cap, Math.max(5, Number(e.target.value) || 5));
+                    setEditingHomework({ ...editingHomework, durationMinutes: val });
+                  }}
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">الدرجة الكلية</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={editingHomework.totalMarks ?? 10}
+                  onChange={(e) => setEditingHomework({ ...editingHomework, totalMarks: Number(e.target.value) || 0 })}
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">آخر موعد للتسليم</label>
+                <input
+                  type="text"
+                  value={editingHomework.deadline}
+                  onChange={(e) => setEditingHomework({ ...editingHomework, deadline: e.target.value })}
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
+                />
+              </div>
             </div>
 
             {/* Questions Review & Editing Component */}
@@ -6456,7 +6536,10 @@ export const AdminPanelModal: React.FC = () => {
               <QuestionReviewEditor
                 questions={editingHomeworkQuestions}
                 setQuestions={setEditingHomeworkQuestions}
-                titleLabel="تعديل ومراجعة جميع أسئلة هذا الواجب واختياراتها"
+                titleLabel="تعديل ومراجعة جميع أسئلة هذا الواجب/الشيت واختياراتها ودرجاتها"
+                onTotalPointsChange={(total) =>
+                  setEditingHomework((prev) => (prev ? { ...prev, totalMarks: total } : prev))
+                }
               />
             </div>
 
@@ -6535,24 +6618,44 @@ export const AdminPanelModal: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">المدة (بالدقائق)</label>
+                <label className="block text-slate-300 font-semibold mb-1">المدة (دقيقة · حد أقصى 240)</label>
                 <input
                   type="number"
+                  min={5}
+                  max={240}
                   value={editingExam.durationMinutes}
-                  onChange={(e) => setEditingExam({ ...editingExam, durationMinutes: Number(e.target.value) || 0 })}
-                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left"
+                  onChange={(e) =>
+                    setEditingExam({
+                      ...editingExam,
+                      durationMinutes: Math.min(240, Math.max(5, Number(e.target.value) || 5)),
+                    })
+                  }
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left font-mono"
                 />
               </div>
             </div>
 
-            <div className="text-xs">
-              <label className="block text-slate-300 font-semibold mb-1">الدرجة الكلية للامتحان</label>
-              <input
-                type="number"
-                value={editingExam.totalMarks}
-                onChange={(e) => setEditingExam({ ...editingExam, totalMarks: Number(e.target.value) || 0 })}
-                className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left sm:w-1/3"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">الدرس / الباب المرتبط</label>
+                <input
+                  type="text"
+                  value={editingExam.lessonTitle || ''}
+                  onChange={(e) => setEditingExam({ ...editingExam, lessonTitle: e.target.value })}
+                  placeholder="مثال: الدرس الأول - الباب الأول"
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">الدرجة الكلية للامتحان</label>
+                <input
+                  type="number"
+                  value={editingExam.totalMarks}
+                  onChange={(e) => setEditingExam({ ...editingExam, totalMarks: Number(e.target.value) || 0 })}
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left font-mono"
+                />
+              </div>
             </div>
 
             {/* Questions Review & Editing Component */}
@@ -6561,6 +6664,9 @@ export const AdminPanelModal: React.FC = () => {
                 questions={editingExamQuestions}
                 setQuestions={setEditingExamQuestions}
                 titleLabel="تعديل ومراجعة جميع أسئلة الامتحان والدرجات"
+                onTotalPointsChange={(total) =>
+                  setEditingExam((prev) => (prev ? { ...prev, totalMarks: total } : prev))
+                }
               />
             </div>
 

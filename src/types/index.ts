@@ -112,6 +112,7 @@ export interface Question {
   text: string;
   image?: string; // صورة بجانب السؤال
   type?: 'mcq' | 'essay'; // نوع السؤال: اختيار من متعدد أو مقالي
+  points?: number; // درجة مستقلة لكل سؤال
   options: string[];
   correctAnswerIndex: number;
   explanation?: string;
@@ -121,6 +122,7 @@ export interface Question {
 export interface Exam {
   id: string;
   title: string;
+  lessonTitle?: string; // ربط الامتحان بالدرس
   grade: GradeLevel;
   durationMinutes: number;
   totalMarks: number;
@@ -132,9 +134,13 @@ export interface Exam {
 export interface Homework {
   id: string;
   title: string;
+  kind?: 'homework' | 'sheet'; // واجب منزلي أو شيت درس
+  lessonTitle?: string; // ربط الواجب/الشيت بالدرس (مثال: الدرس الأول)
   grade: GradeLevel;
   description: string;
   deadline: string;
+  durationMinutes?: number; // مدة الحل بالدقائق (حد أقصى 24 ساعة للواجب و3 ساعات للشيت)
+  totalMarks?: number; // الدرجة الكلية للواجب أو الشيت
   fileUrl?: string;
   fileName?: string;
   fileType?: 'pdf' | 'doc' | 'docx' | 'xls' | 'xlsx' | 'image';
@@ -220,6 +226,8 @@ export interface ExamSubmission {
   id: string;
   examId: string;
   examTitle: string;
+  assessmentType?: 'exam' | 'sheet' | 'homework'; // تمييز الامتحان عن الشيت عن الواجب
+  lessonTitle?: string;
   studentId: string;
   studentName: string;
   studentPhone: string;
@@ -237,6 +245,8 @@ export interface ExamSubmission {
   teacherExtraScore?: number;
   teacherGraded?: boolean;
   essayAnswers?: Record<string, string>;
+  essayScores?: Record<string, number>; // درجة المعلم لكل سؤال مقالي بشكل مستقل
+  blankCount?: number; // عدد الأسئلة المتروكة فارغة (صفر تلقائي)
   status?: 'pending_teacher_review' | 'fully_graded';
   gradedBy?: string;
   gradedAt?: string;
@@ -250,12 +260,15 @@ export interface StudentDossier {
   totalExams: number;
   takenExams: number;
   averageExamScore: number;
+  totalSheets: number;
+  solvedSheets: number;
+  averageSheetScore: number;
   totalHomeworks: number;
   solvedHomeworks: number;
   homeworkCompletionRate: number;
   lectureRecords: { lectureId: string; lectureTitle: string; entered: boolean; date?: string }[];
-  examRecords: { examId: string; examTitle: string; taken: boolean; score?: number; maxScore?: number; percentage?: number; date?: string }[];
-  homeworkRecords: { homeworkId: string; homeworkTitle: string; solved: boolean; date?: string }[];
+  examRecords: { examId: string; examTitle: string; lessonTitle?: string; taken: boolean; score?: number; maxScore?: number; percentage?: number; status?: string; date?: string }[];
+  homeworkRecords: { homeworkId: string; homeworkTitle: string; kind: 'homework' | 'sheet'; lessonTitle?: string; solved: boolean; score?: number; maxScore?: number; percentage?: number; status?: string; date?: string }[];
 }
 
 export interface PaymentReceiptRequest {

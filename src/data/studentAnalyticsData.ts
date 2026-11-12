@@ -11,7 +11,7 @@ import {
 export interface StudentAccessState {
   lectures: Record<string, { entered: boolean; date?: string; enteredCount?: number; completed?: boolean; completedAt?: string }>;
   exams: Record<string, { taken: boolean; score?: number; maxScore?: number; percentage?: number; date?: string }>;
-  homeworks: Record<string, { solved: boolean; date?: string }>;
+  homeworks: Record<string, { solved: boolean; score?: number; maxScore?: number; percentage?: number; date?: string }>;
 }
 
 // Master Admin Account

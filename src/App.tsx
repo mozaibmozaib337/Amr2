@@ -17,6 +17,8 @@ import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { DocumentViewerModal } from './components/DocumentViewerModal';
 import { NotificationModal } from './components/NotificationModal';
 import { GeminiTeacherDashboard } from './components/GeminiTeacherDashboard';
+import { TopRankingsDirectorySection } from './components/TopRankingsDirectorySection';
+import { StudentDirectorySection } from './components/StudentDirectorySection';
 import { Footer } from './components/Footer';
 
 function MainApp() {
@@ -38,6 +40,8 @@ function MainApp() {
         {activeTab === 'files' && <FilesSection />}
         {activeTab === 'exams' && <ExamsSection />}
         {activeTab === 'homework' && <HomeworkSection />}
+        {activeTab === 'top_rankings' && <TopRankingsDirectorySection />}
+        {activeTab === 'student_data' && <StudentDirectorySection />}
         {activeTab === 'wallet' && <WalletSection />}
         {activeTab === 'leaderboard' && <LeaderboardSection />}
         {activeTab === 'support' && <SupportSection />}

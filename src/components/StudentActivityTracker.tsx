@@ -19,6 +19,7 @@ import {
   Filter,
 } from 'lucide-react';
 import { GradeLevel, StudentDossier } from '../types';
+import { buildWhatsAppUrl, openExternalSafe } from '../utils/safeExternalLink';
 
 export const StudentActivityTracker: React.FC = () => {
   const {
@@ -55,14 +56,13 @@ export const StudentActivityTracker: React.FC = () => {
   // Send parent WhatsApp dossier
   const handleSendParentWhatsApp = (dossier: StudentDossier) => {
     const parentPhone = dossier.student.parentPhone || dossier.student.phone;
-    const msg = encodeURIComponent(
+    const msg =
       `السلام عليكم ورحمة الله وبركاته،\nولي أمر الطالب المحترم: ${dossier.student.name} (${dossier.student.studentCode})\n\nنود إحاطتكم بتقرير المتابعة والأداء الأكاديمي الشامل في مادة الكيمياء مع مستر عمرو السيد:\n\n` +
       `📌 نسبة حضور المحاضرات: ${dossier.attendanceRate}% (${dossier.enteredLectures} من ${dossier.totalLectures})\n` +
       `📌 متوسط درجات الاختبارات: ${dossier.averageExamScore}%\n` +
       `📌 نسبة تسليم الواجبات والشيتات: ${dossier.homeworkCompletionRate}%\n\n` +
-      `نتمنى له دوام التفوق والنجاح دائماً في الثانوية العامة! 🧪✨`
-    );
-    window.open(`https://wa.me/2${parentPhone}?text=${msg}`, '_blank');
+      `نتمنى له دوام التفوق والنجاح دائماً في الثانوية العامة! 🧪✨`;
+    openExternalSafe(buildWhatsAppUrl(parentPhone, msg));
   };
 
   return (

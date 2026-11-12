@@ -233,15 +233,28 @@ interface PlatformContextType {
     maxScore: number,
     timeSpentMinutes?: number,
     extraOptions?: {
+      assessmentType?: 'exam' | 'sheet' | 'homework';
+      lessonTitle?: string;
       autoMcqScore?: number;
       autoMcqMax?: number;
       essayAnswers?: Record<string, string>;
+      essayScores?: Record<string, number>;
+      blankCount?: number;
       status?: 'pending_teacher_review' | 'fully_graded';
     }
   ) => void;
-  updateExamSubmissionGrade: (submissionId: string, teacherExtraScore: number) => void;
-  recordHomeworkAction: (homeworkId: string, homeworkTitle: string, isSolved: boolean) => void;
-  getExamRankings: (examId: string) => ExamSubmission[];
+  updateExamSubmissionGrade: (
+    submissionId: string,
+    teacherExtraScore: number,
+    essayScores?: Record<string, number>
+  ) => void;
+  recordHomeworkAction: (
+    homeworkId: string,
+    homeworkTitle: string,
+    isSolved: boolean,
+    scoreInfo?: { score?: number; maxScore?: number }
+  ) => void;
+  getExamRankings: (examId: string, typeFilter?: 'exam' | 'sheet') => ExamSubmission[];
   getStudentDossier: (studentId: string) => StudentDossier | null;
   // Payment Verification & Receipt Processing (20-min activation)
   paymentRequests: PaymentReceiptRequest[];
@@ -1415,28 +1428,36 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Live Tracking: Record exam submission and score with smart MCQ + Essay double grading
+  // Live Tracking: Record assessment submission (Exam / Sheet / Homework) with smart MCQ + Essay grading
   const recordExamResult = (
     examId: string,
     examTitle: string,
     score: number,
     maxScore: number,
-    timeSpentMinutes: number = 25,
+    timeSpentMinutes: number = 1,
     extraOptions?: {
+      assessmentType?: 'exam' | 'sheet' | 'homework';
+      lessonTitle?: string;
       autoMcqScore?: number;
       autoMcqMax?: number;
       essayAnswers?: Record<string, string>;
+      essayScores?: Record<string, number>;
+      blankCount?: number;
       status?: 'pending_teacher_review' | 'fully_graded';
     }
   ) => {
     if (!currentUser) return;
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-    const percentage = Math.round((score / (maxScore || 1)) * 100);
+    const safeMax = maxScore > 0 ? maxScore : 1;
+    const percentage = Math.round((score / safeMax) * 100);
+    const assessmentType = extraOptions?.assessmentType || 'exam';
 
     const submission: ExamSubmission = {
-      id: 'sub_' + Date.now(),
+      id: 'sub_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       examId,
       examTitle,
+      assessmentType,
+      lessonTitle: extraOptions?.lessonTitle,
       studentId: currentUser.id,
       studentName: currentUser.name,
       studentPhone: currentUser.phone,
@@ -1451,22 +1472,42 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       autoMcqScore: extraOptions?.autoMcqScore !== undefined ? extraOptions.autoMcqScore : score,
       autoMcqMax: extraOptions?.autoMcqMax !== undefined ? extraOptions.autoMcqMax : maxScore,
       essayAnswers: extraOptions?.essayAnswers || {},
+      essayScores: extraOptions?.essayScores,
+      blankCount: extraOptions?.blankCount ?? 0,
       status: extraOptions?.status || 'fully_graded',
       teacherGraded: false,
     };
 
-    setExamSubmissions((prev) => [submission, ...prev]);
+    // Replace previous submission by same student for the same exam/sheet/homework if re-graded or updated
+    setExamSubmissions((prev) => {
+      const filtered = prev.filter(
+        (s) => !(s.examId === examId && s.studentId === currentUser.id && (s.assessmentType || 'exam') === assessmentType)
+      );
+      return [submission, ...filtered];
+    });
     saveDocument('exam_submissions', submission.id, submission);
 
     setStudentAccessMap((prev) => {
       const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
+      if (assessmentType === 'sheet' || assessmentType === 'homework') {
+        return {
+          ...prev,
+          [currentUser.id]: {
+            ...current,
+            homeworks: {
+              ...current.homeworks,
+              [examId]: { solved: true, score, maxScore, percentage, date: nowStr },
+            },
+          },
+        };
+      }
       return {
         ...prev,
         [currentUser.id]: {
           ...current,
           exams: {
             ...current.exams,
-            [examId]: { taken: true, score, maxScore, date: nowStr },
+            [examId]: { taken: true, score, maxScore, percentage, date: nowStr },
           },
         },
       };
@@ -1478,7 +1519,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       studentPhone: currentUser.phone,
       studentCode: currentUser.studentCode,
       grade: currentUser.grade,
-      type: 'exam_submit',
+      type: assessmentType === 'exam' ? 'exam_submit' : 'homework_submit',
       itemId: examId,
       itemTitle: examTitle,
       score,
@@ -1488,22 +1529,28 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
-  // Teacher Review: Add essay score on top of AI auto MCQ score
-  const updateExamSubmissionGrade = (submissionId: string, teacherExtraScore: number) => {
+  // Teacher Review: Update essay score (per-question or aggregate) on top of auto MCQ score
+  const updateExamSubmissionGrade = (
+    submissionId: string,
+    teacherExtraScore: number,
+    essayScores?: Record<string, number>
+  ) => {
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
     let updatedSub: ExamSubmission | null = null;
 
     setExamSubmissions((prev) =>
       prev.map((sub) => {
         if (sub.id === submissionId) {
-          const autoScore = sub.autoMcqScore !== undefined ? sub.autoMcqScore : sub.score;
-          const finalScore = autoScore + teacherExtraScore;
-          const percentage = Math.round((finalScore / (sub.maxScore || 1)) * 100);
+          const autoScore = sub.autoMcqScore !== undefined ? sub.autoMcqScore : 0;
+          const finalScore = Number((autoScore + teacherExtraScore).toFixed(2));
+          const safeMax = sub.maxScore > 0 ? sub.maxScore : 1;
+          const percentage = Math.round((finalScore / safeMax) * 100);
           updatedSub = {
             ...sub,
             score: finalScore,
             percentage,
             teacherExtraScore,
+            essayScores: essayScores ?? sub.essayScores,
             teacherGraded: true,
             status: 'fully_graded',
             gradedBy: currentUser?.name || 'مستر عمرو السيد',
@@ -1523,13 +1570,37 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const studentId = target.studentId;
         const examId = target.examId;
         const current = prev[studentId] || { lectures: {}, exams: {}, homeworks: {} };
+        if (target.assessmentType === 'sheet' || target.assessmentType === 'homework') {
+          return {
+            ...prev,
+            [studentId]: {
+              ...current,
+              homeworks: {
+                ...current.homeworks,
+                [examId]: {
+                  solved: true,
+                  score: target.score,
+                  maxScore: target.maxScore,
+                  percentage: target.percentage,
+                  date: nowStr,
+                },
+              },
+            },
+          };
+        }
         return {
           ...prev,
           [studentId]: {
             ...current,
             exams: {
               ...current.exams,
-              [examId]: { taken: true, score: target.score, maxScore: target.maxScore, date: nowStr },
+              [examId]: {
+                taken: true,
+                score: target.score,
+                maxScore: target.maxScore,
+                percentage: target.percentage,
+                date: nowStr,
+              },
             },
           },
         };
@@ -1538,9 +1609,18 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // Live Tracking: Record homework submission
-  const recordHomeworkAction = (homeworkId: string, homeworkTitle: string, isSolved: boolean) => {
+  const recordHomeworkAction = (
+    homeworkId: string,
+    homeworkTitle: string,
+    isSolved: boolean,
+    scoreInfo?: { score?: number; maxScore?: number }
+  ) => {
     if (!currentUser) return;
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const percentage =
+      scoreInfo?.score !== undefined && scoreInfo?.maxScore
+        ? Math.round((scoreInfo.score / scoreInfo.maxScore) * 100)
+        : undefined;
 
     setStudentAccessMap((prev) => {
       const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
@@ -1550,7 +1630,13 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ...current,
           homeworks: {
             ...current.homeworks,
-            [homeworkId]: { solved: isSolved, date: nowStr },
+            [homeworkId]: {
+              solved: isSolved,
+              score: scoreInfo?.score,
+              maxScore: scoreInfo?.maxScore,
+              percentage,
+              date: nowStr,
+            },
           },
         },
       };
@@ -1566,18 +1652,30 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         type: 'homework_submit',
         itemId: homeworkId,
         itemTitle: homeworkTitle,
+        score: scoreInfo?.score,
+        maxScore: scoreInfo?.maxScore,
+        percentage,
         status: 'completed',
       });
     }
   };
 
-  // Ranking: تفنيد وترتيب أعلى الدرجات في الامتحان الواحد من الأعلى للأقل
-  const getExamRankings = (examId: string): ExamSubmission[] => {
+  // Ranking: تفنيد وترتيب أعلى الدرجات في الامتحان أو الشيت الواحد من الأول للأخير بدون أي حد أقصى
+  const getExamRankings = (examId: string, typeFilter?: 'exam' | 'sheet'): ExamSubmission[] => {
     return examSubmissions
-      .filter((sub) => sub.examId === examId)
+      .filter((sub) => {
+        if (sub.examId !== examId) return false;
+        const subType = sub.assessmentType || 'exam';
+        if (subType === 'homework') return false; // لا تظهر الواجبات العادية في الأوائل
+        if (typeFilter) {
+          return subType === typeFilter;
+        }
+        return true;
+      })
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
-        return a.timeSpentMinutes - b.timeSpentMinutes; // Faster completion time wins tie
+        if (b.percentage !== a.percentage) return b.percentage - a.percentage;
+        return a.timeSpentMinutes - b.timeSpentMinutes; // الأسرع في الإنهاء يتقدم عند التعادل
       })
       .map((sub, index) => ({
         ...sub,
@@ -1585,7 +1683,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }));
   };
 
-  // Individual Student Complete Dossier (بيانات كاملة لكل طالب لوحده)
+  // Individual Student Complete Dossier (بيانات كاملة لكل طالب تشمل الامتحانات والشيتات والواجبات والحضور)
   const getStudentDossier = (studentId: string): StudentDossier | null => {
     const student = registeredAccounts.find((a) => a.id === studentId);
     if (!student) return null;
@@ -1601,24 +1699,61 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const examRecords = exams.map((ex) => {
       const exState = access.exams?.[ex.id];
-      const isTaken = !!exState?.taken;
+      const latestSub = examSubmissions.find(
+        (s) => s.studentId === studentId && s.examId === ex.id && (s.assessmentType || 'exam') === 'exam'
+      );
+      const isTaken = !!exState?.taken || !!latestSub;
+      const finalScore = latestSub?.score ?? exState?.score;
+      const finalMax = latestSub?.maxScore ?? exState?.maxScore ?? ex.totalMarks;
+      const finalPct =
+        latestSub?.percentage ??
+        (finalScore !== undefined && finalMax ? Math.round((finalScore / finalMax) * 100) : undefined);
+
       return {
         examId: ex.id,
         examTitle: ex.title,
+        lessonTitle: ex.lessonTitle,
         taken: isTaken,
-        score: exState?.score,
-        maxScore: ex.totalMarks,
-        percentage: exState?.score !== undefined ? Math.round((exState.score / ex.totalMarks) * 100) : undefined,
-        date: exState?.date,
+        score: finalScore,
+        maxScore: finalMax,
+        percentage: finalPct,
+        status: latestSub?.status,
+        date: latestSub?.submittedAt || exState?.date,
       };
     });
 
-    const homeworkRecords = homeworks.map((hw) => ({
-      homeworkId: hw.id,
-      homeworkTitle: hw.title,
-      solved: !!access.homeworks?.[hw.id]?.solved,
-      date: access.homeworks?.[hw.id]?.date,
-    }));
+    const homeworkRecords = homeworks.map((hw) => {
+      const hwState = access.homeworks?.[hw.id];
+      const kind: 'homework' | 'sheet' = hw.kind === 'sheet' ? 'sheet' : 'homework';
+      const latestSub = examSubmissions.find(
+        (s) => s.studentId === studentId && s.examId === hw.id && s.assessmentType !== 'exam'
+      );
+      const isSolved = !!hwState?.solved || !!latestSub;
+      const fallbackMax =
+        hw.totalMarks ||
+        (hw.questions && hw.questions.length > 0
+          ? hw.questions.reduce((sum, q) => sum + (q.points ?? 1), 0)
+          : undefined);
+      const finalScore = latestSub?.score ?? hwState?.score;
+      const finalMax = latestSub?.maxScore ?? hwState?.maxScore ?? fallbackMax;
+      const finalPct =
+        latestSub?.percentage ??
+        hwState?.percentage ??
+        (finalScore !== undefined && finalMax ? Math.round((finalScore / finalMax) * 100) : undefined);
+
+      return {
+        homeworkId: hw.id,
+        homeworkTitle: hw.title,
+        kind,
+        lessonTitle: hw.lessonTitle,
+        solved: isSolved,
+        score: finalScore,
+        maxScore: finalMax,
+        percentage: finalPct,
+        status: latestSub?.status,
+        date: latestSub?.submittedAt || hwState?.date,
+      };
+    });
 
     const totalLectures = lectures.length;
     const enteredLectures = lectureRecords.filter((r) => r.entered).length;
@@ -1634,8 +1769,19 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           )
         : 0;
 
-    const totalHomeworks = homeworks.length;
-    const solvedHomeworks = homeworkRecords.filter((r) => r.solved).length;
+    const sheetRecords = homeworkRecords.filter((r) => r.kind === 'sheet');
+    const totalSheets = sheetRecords.length;
+    const solvedSheetRecords = sheetRecords.filter((r) => r.solved);
+    const solvedSheets = solvedSheetRecords.length;
+    const scoredSheets = solvedSheetRecords.filter((r) => r.percentage !== undefined);
+    const averageSheetScore =
+      scoredSheets.length > 0
+        ? Math.round(scoredSheets.reduce((acc, cur) => acc + (cur.percentage || 0), 0) / scoredSheets.length)
+        : 0;
+
+    const onlyHomeworkRecords = homeworkRecords.filter((r) => r.kind === 'homework');
+    const totalHomeworks = onlyHomeworkRecords.length;
+    const solvedHomeworks = onlyHomeworkRecords.filter((r) => r.solved).length;
     const homeworkRate = totalHomeworks > 0 ? Math.round((solvedHomeworks / totalHomeworks) * 100) : 0;
 
     return {
@@ -1646,6 +1792,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       totalExams,
       takenExams,
       averageExamScore: avgScore,
+      totalSheets,
+      solvedSheets,
+      averageSheetScore,
       totalHomeworks,
       solvedHomeworks,
       homeworkCompletionRate: homeworkRate,

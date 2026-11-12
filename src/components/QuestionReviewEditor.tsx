@@ -24,17 +24,20 @@ interface QuestionReviewEditorProps {
   questions: Question[];
   setQuestions: React.Dispatch<React.SetStateAction<Question[]>>;
   titleLabel?: string;
+  onTotalPointsChange?: (totalPoints: number) => void;
 }
 
 export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
   questions,
   setQuestions,
   titleLabel = 'مراجعة وتعديل الأسئلة',
+  onTotalPointsChange,
 }) => {
   const fileInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const [aiPrompt, setAiPrompt] = useState('');
   const [isRefining, setIsRefining] = useState(false);
   const [refineNotice, setRefineNotice] = useState<string | null>(null);
+  const [editorError, setEditorError] = useState<string | null>(null);
 
   // AI Refinement without 404 network errors
   const handleRefineWithAi = async () => {
@@ -71,6 +74,7 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
       id: `q_manual_mcq_${Date.now()}_${questions.length + 1}`,
       text: `سؤال ${questions.length + 1}: اكتب نص السؤال الكيميائي هنا...`,
       type: 'mcq',
+      points: 1,
       options: ['الخيار (أ)', 'الخيار (ب)', 'الخيار (ج)', 'الخيار (د)'],
       correctAnswerIndex: 0,
       explanation: '',
@@ -84,6 +88,7 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
       id: `q_manual_essay_${Date.now()}_${questions.length + 1}`,
       text: `سؤال مقالي ${questions.length + 1}: اكتب نص المسألة الكيميائية أو السؤال المقالي هنا...`,
       type: 'essay',
+      points: 2,
       options: [],
       correctAnswerIndex: 0,
       modelAnswer: '',
@@ -169,16 +174,28 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
     );
   };
 
+  // Update question independent points
+  const handleUpdatePoints = (qIndex: number, rawVal: string) => {
+    const parsed = parseFloat(rawVal);
+    const cleanPoints = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    setQuestions((prev) =>
+      prev.map((q, idx) => (idx === qIndex ? { ...q, points: cleanPoints } : q))
+    );
+  };
+
   // 4. Delete single option / answer (حذف الإجابة أو الخيار)
   const handleDeleteOption = (qIndex: number, optIndex: number) => {
+    const targetQ = questions[qIndex];
+    if (targetQ && (targetQ.options || []).length <= 1) {
+      setEditorError('يجب الإبقاء على خيار واحد على الأقل في السؤال الاختياري، أو يمكنك تحويل السؤال إلى مقالي بالكامل.');
+      setTimeout(() => setEditorError(null), 4000);
+      return;
+    }
     setQuestions((prev) =>
       prev.map((q, idx) => {
         if (idx !== qIndex) return q;
         const currentOpts = q.options || [];
-        if (currentOpts.length <= 1) {
-          alert('يجب الإبقاء على خيار واحد على الأقل، أو يمكنك تحويل السؤال لمقالي بالكامل');
-          return q;
-        }
+        if (currentOpts.length <= 1) return q;
         const newOpts = currentOpts.filter((_, i) => i !== optIndex);
         const newCorrect =
           q.correctAnswerIndex === optIndex
@@ -221,8 +238,17 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
     );
   };
 
-  const mcqCount = questions.filter((q) => q.type !== 'essay').length;
-  const essayCount = questions.filter((q) => q.type === 'essay').length;
+  const mcqQuestions = questions.filter((q) => q.type !== 'essay');
+  const essayQuestions = questions.filter((q) => q.type === 'essay');
+  const mcqCount = mcqQuestions.length;
+  const essayCount = essayQuestions.length;
+  const mcqTotalPoints = Number(
+    mcqQuestions.reduce((acc, q) => acc + (q.points ?? 1), 0).toFixed(2)
+  );
+  const essayTotalPoints = Number(
+    essayQuestions.reduce((acc, q) => acc + (q.points ?? 1), 0).toFixed(2)
+  );
+  const totalDefinedPoints = Number((mcqTotalPoints + essayTotalPoints).toFixed(2));
 
   return (
     <div className="p-4 sm:p-5 bg-[#050811] rounded-2xl border-2 border-cyan-800/60 space-y-4 shadow-xl">
@@ -233,19 +259,11 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
             <FileQuestion className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h4 className="text-sm font-extrabold text-white">
-                {titleLabel} ({questions.length} سؤال)
-              </h4>
-              <span className="text-[10px] bg-cyan-950 text-cyan-300 border border-cyan-800 px-2 py-0.5 rounded-full font-bold">
-                {mcqCount} اختيار من متعدد
-              </span>
-              <span className="text-[10px] bg-amber-950 text-amber-300 border border-amber-800 px-2 py-0.5 rounded-full font-bold">
-                {essayCount} مقالي يصححه المعلم
-              </span>
-            </div>
+            <h4 className="text-sm font-extrabold text-white">
+              {titleLabel} ({questions.length} سؤال)
+            </h4>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              يمكنك إضافة الأسئلة يدوياً بدون ذكاء اصطناعي، حذف أي إجابة، أو تحويل السؤال الاختياري لمقالي لتصححه بنفسك.
+              يمكنك إضافة عدد غير محدود من الأسئلة، تحديد درجة مستقلة لكل سؤال، أو التحويل الفوري بين الاختياري والمقالي.
             </p>
           </div>
         </div>
@@ -255,24 +273,70 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
           <button
             type="button"
             onClick={handleAddManualMcq}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer whitespace-nowrap shrink-0"
             title="إضافة سؤال اختيار من متعدد وتحديد الإجابة الصحيحة وحذف الخيارات"
           >
             <CheckSquare className="w-3.5 h-3.5" />
-            <span>+ سؤال اختياري (يدوي)</span>
+            <span>+ سؤال اختياري</span>
           </button>
 
           <button
             type="button"
             onClick={handleAddManualEssay}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
-            title="إضافة سؤال مقالي تفصيلي يصححه المعلم يدوياً في لوحة التصحيح"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer whitespace-nowrap shrink-0"
+            title="إضافة سؤال مقالي تفصيلي يصححه المعلم يدوياً ويرصد درجته"
           >
             <PenTool className="w-3.5 h-3.5" />
-            <span>+ سؤال مقالي (يصححه المعلم)</span>
+            <span>+ سؤال مقالي</span>
           </button>
         </div>
       </div>
+
+      {/* Dynamic Top Statistics Summary Box */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 bg-[#081024] border border-cyan-900/50 rounded-2xl">
+        <div className="p-2.5 bg-[#050811] border border-slate-800 rounded-xl">
+          <span className="text-[10px] text-slate-400 font-semibold block">إجمالي الأسئلة</span>
+          <span className="text-base font-black text-white font-mono tabular-nums">{questions.length} سؤال</span>
+        </div>
+        <div className="p-2.5 bg-[#050811] border border-cyan-900/50 rounded-xl">
+          <span className="text-[10px] text-cyan-400 font-semibold block">الاختيار من متعدد (MCQ)</span>
+          <span className="text-base font-black text-cyan-300 font-mono tabular-nums">
+            {mcqCount} <span className="text-[11px] font-sans font-bold">({mcqTotalPoints} درجة)</span>
+          </span>
+        </div>
+        <div className="p-2.5 bg-[#050811] border border-amber-900/50 rounded-xl">
+          <span className="text-[10px] text-amber-400 font-semibold block">الأسئلة المقالية</span>
+          <span className="text-base font-black text-amber-300 font-mono tabular-nums">
+            {essayCount} <span className="text-[11px] font-sans font-bold">({essayTotalPoints} درجة)</span>
+          </span>
+        </div>
+        <div className="p-2.5 bg-[#050811] border border-emerald-900/50 rounded-xl flex items-center justify-between gap-2">
+          <div>
+            <span className="text-[10px] text-emerald-400 font-semibold block">مجموع الدرجات</span>
+            <span className="text-base font-black text-emerald-300 font-mono tabular-nums">{totalDefinedPoints} درجة</span>
+          </div>
+          {onTotalPointsChange && questions.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onTotalPointsChange(totalDefinedPoints)}
+              className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600/35 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-bold cursor-pointer whitespace-nowrap shrink-0"
+              title="تحديث حقل الدرجة الكلية تلقائياً بمجموع درجات الأسئلة"
+            >
+              اعتماد المجموع
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Inline Editor Notice (replaces window.alert) */}
+      {editorError && (
+        <div className="p-3 bg-rose-500/15 border border-rose-500/40 rounded-xl text-rose-300 text-xs font-semibold flex items-center justify-between gap-2">
+          <span>⚠️ {editorError}</span>
+          <button type="button" onClick={() => setEditorError(null)} className="text-rose-200 hover:text-white cursor-pointer">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Empty State Banner if no questions yet */}
       {questions.length === 0 && (
@@ -395,8 +459,21 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
                     </button>
                   </div>
 
-                  {/* Right Header Buttons: Image Upload, Convert Type Button, and Delete */}
-                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                  {/* Right Header Buttons: Custom Points Input, Convert Type Button, Image Upload, and Delete */}
+                  <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+                    {/* Independent Custom Points per Question */}
+                    <div className="flex items-center gap-1.5 bg-[#050811] border border-emerald-700/50 rounded-lg px-2 py-1">
+                      <label className="text-[10px] font-bold text-emerald-300 whitespace-nowrap">درجة السؤال:</label>
+                      <input
+                        type="number"
+                        min={0.5}
+                        step={0.5}
+                        value={q.points ?? 1}
+                        onChange={(e) => handleUpdatePoints(qIdx, e.target.value)}
+                        className="w-14 bg-[#0b1428] border border-slate-700 focus:border-emerald-400 rounded px-1.5 py-0.5 text-xs font-mono font-bold text-white text-center focus:outline-none tabular-nums"
+                      />
+                    </div>
+
                     {/* Instant Convert Button */}
                     <button
                       type="button"
@@ -406,7 +483,7 @@ export const QuestionReviewEditor: React.FC<QuestionReviewEditorProps> = ({
                     >
                       <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />
                       <span className="hidden md:inline">
-                        {isEssay ? 'تحويل لاختياري' : 'تحويل لمقالي (أصححه أنا)'}
+                        {isEssay ? 'تحويل لاختياري' : 'تحويل لمقالي'}
                       </span>
                     </button>
 

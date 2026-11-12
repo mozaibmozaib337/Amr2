@@ -16,6 +16,7 @@ import {
   Flame,
   Award,
   Users,
+  Trophy,
 } from 'lucide-react';
 import { PerformanceAnalyticsSection } from './PerformanceAnalyticsSection';
 import { ExamRankingsSection } from './ExamRankingsSection';
@@ -97,14 +98,32 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ setActiveTab }) =>
                 <span>الامتحانات وبنك الأسئلة</span>
               </button>
 
+              <button
+                onClick={() => setActiveTab('top_rankings')}
+                className="px-4 py-2.5 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 font-bold text-xs sm:text-sm rounded-xl border border-indigo-500/40 transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Trophy className="w-4 h-4 text-amber-400" />
+                <span>أوائل الشيتات والامتحانات</span>
+              </button>
+
               {isAdmin && (
-                <button
-                  onClick={() => setIsAdminPanelOpen(true)}
-                  className="px-4 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-xs sm:text-sm rounded-xl border border-amber-500/40 transition-all flex items-center gap-2 cursor-pointer"
-                >
-                  <Sliders className="w-4 h-4 text-amber-400" />
-                  <span>لوحة تحكم المعلم والإدارة</span>
-                </button>
+                <>
+                  <button
+                    onClick={() => setActiveTab('student_data')}
+                    className="px-4 py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 font-bold text-xs sm:text-sm rounded-xl border border-emerald-500/40 transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Users className="w-4 h-4 text-emerald-400" />
+                    <span>بيانات الطالب والتقارير الشاملة</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsAdminPanelOpen(true)}
+                    className="px-4 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-xs sm:text-sm rounded-xl border border-amber-500/40 transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Sliders className="w-4 h-4 text-amber-400" />
+                    <span>لوحة تحكم المعلم والإدارة</span>
+                  </button>
+                </>
               )}
             </div>
           </div>
