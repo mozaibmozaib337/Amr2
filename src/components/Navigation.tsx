@@ -118,7 +118,7 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 ${isActive ? (item.isSpecial ? 'text-amber-400' : 'text-cyan-400') : (item.isSpecial ? 'text-amber-400' : 'text-slate-400')}`} />
+                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? (item.isSpecial ? 'text-amber-400' : 'text-cyan-400') : (item.isSpecial ? 'text-amber-400' : 'text-slate-400')}`} />
                   <span>{item.label}</span>
                 </button>
               );

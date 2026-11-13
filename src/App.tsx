@@ -25,7 +25,7 @@ function MainApp() {
   const [activeTab, setActiveTab] = useState('home');
 
   return (
-    <div className="min-h-screen flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
+    <div className="min-h-screen min-w-[1100px] flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
       {/* Top Header with Quick Theme and Profile */}
       <Header activeTab={activeTab} setActiveTab={setActiveTab} />
 

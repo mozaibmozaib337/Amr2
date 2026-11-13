@@ -75,10 +75,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
   return (
     <header className="sticky top-0 z-40 bg-[#080e1e]/95 backdrop-blur-md border-b border-cyan-900/30 transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4 flex-nowrap">
           
           {/* Brand & Teacher Lockup */}
-          <div className="flex items-center gap-3.5">
+          <div className="flex items-center gap-3.5 shrink-0">
             <div className="relative group shrink-0">
               <div className="w-13 h-13 rounded-full overflow-hidden border-2 border-cyan-400/80 shadow-[0_0_15px_rgba(6,182,212,0.35)] bg-slate-900">
                 <img
@@ -93,31 +93,31 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
               </span>
             </div>
 
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg md:text-xl font-extrabold text-white tracking-wide">
+            <div className="flex flex-col shrink-0">
+              <div className="flex items-center gap-2 flex-nowrap">
+                <h1 className="text-lg md:text-xl font-extrabold text-white tracking-wide whitespace-nowrap">
                   الكيمياء مع مستر عمرو السيد
                 </h1>
                 {isAdmin ? (
-                  <span className="text-[11px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-md flex items-center gap-1">
-                    <ShieldCheck className="w-3 h-3 text-amber-400" />
+                  <span className="text-[11px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-md flex items-center gap-1 whitespace-nowrap shrink-0">
+                    <ShieldCheck className="w-3 h-3 text-amber-400 shrink-0" />
                     المشرف العام
                   </span>
                 ) : isSecretary ? (
-                  <span className="text-[11px] font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-md flex items-center gap-1">
-                    <Users className="w-3 h-3 text-blue-400" />
+                  <span className="text-[11px] font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-md flex items-center gap-1 whitespace-nowrap shrink-0">
+                    <Users className="w-3 h-3 text-blue-400 shrink-0" />
                     سكرتارية المنصة
                   </span>
                 ) : null}
               </div>
-              <span className="text-xs text-cyan-400/90 font-medium">
+              <span className="text-xs text-cyan-400/90 font-medium whitespace-nowrap">
                 المنصة التعليمية الرسمية لمادة الكيمياء للثانوية العامة والأزهرية
               </span>
             </div>
           </div>
 
           {/* Right Controls: Grade Filter, Notifications, Theme Switcher & User / Admin Profile */}
-          <div className="flex items-center gap-2 sm:gap-2.5">
+          <div className="flex items-center gap-2.5 shrink-0 flex-nowrap">
             
             {/* Notification Bell with Red Badge and Counter */}
             <button
@@ -126,7 +126,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
                 markBroadcastsAsRead();
               }}
               title="إشعارات ورسائل المنصة"
-              className="relative p-2 rounded-xl bg-[#0d172e] border border-cyan-900/40 hover:border-cyan-500/50 text-slate-200 transition-all cursor-pointer flex items-center justify-center group"
+              className="relative p-2 rounded-xl bg-[#0d172e] border border-cyan-900/40 hover:border-cyan-500/50 text-slate-200 transition-all cursor-pointer flex items-center justify-center group shrink-0"
             >
               <Bell className="w-4 h-4 text-cyan-300 group-hover:text-cyan-400 group-hover:scale-110 transition-transform" />
               {unreadBroadcastCount > 0 && (
@@ -140,27 +140,27 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
             <button
               onClick={cycleTheme}
               title={getThemeTitle()}
-              className="p-2 rounded-xl bg-[#0d172e] border border-cyan-900/40 hover:border-cyan-500/50 text-slate-200 transition-all cursor-pointer flex items-center gap-1.5"
+              className="p-2 rounded-xl bg-[#0d172e] border border-cyan-900/40 hover:border-cyan-500/50 text-slate-200 transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
             >
               {getThemeIcon()}
-              <span className="text-[11px] font-semibold hidden xl:inline text-slate-300">
+              <span className="text-[11px] font-semibold hidden xl:inline text-slate-300 whitespace-nowrap">
                 {settings.themeMode === 'light' ? 'فاتح' : settings.themeMode === 'system' ? 'تلقائي' : 'داكن'}
               </span>
             </button>
 
             {/* Grade Indicator / Selector: Locked for students to their own grade; Switcher only for Admin / Secretary / Guests */}
             {currentUser?.role === 'student' ? (
-              <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-[#0d172e] border border-cyan-800/60 rounded-xl text-cyan-300 text-xs font-bold shadow-sm">
-                <GraduationCap className="w-4 h-4 text-cyan-400" />
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0d172e] border border-cyan-800/60 rounded-xl text-cyan-300 text-xs font-bold shadow-sm whitespace-nowrap shrink-0">
+                <GraduationCap className="w-4 h-4 text-cyan-400 shrink-0" />
                 <span>{gradeLabels[currentUser.grade] || 'الصف الثالث الثانوي'}</span>
               </div>
             ) : (
-              <div className="hidden md:flex items-center bg-[#0d172e] border border-cyan-900/40 rounded-xl p-1 text-xs">
-                <GraduationCap className="w-4 h-4 text-cyan-400 mx-2" />
+              <div className="flex items-center bg-[#0d172e] border border-cyan-900/40 rounded-xl p-1 text-xs whitespace-nowrap shrink-0">
+                <GraduationCap className="w-4 h-4 text-cyan-400 mx-2 shrink-0" />
                 <select
                   value={activeGrade}
                   onChange={(e) => setActiveGrade(e.target.value as GradeLevel | 'all')}
-                  className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer py-1 pe-2"
+                  className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer py-1 pe-2 whitespace-nowrap"
                 >
                   <option value="all" className="bg-[#0b1329] text-white">جميع الصفوف الدراسية</option>
                   <option value="sec3" className="bg-[#0b1329] text-white">الصف الثالث الثانوي (2026)</option>
@@ -172,43 +172,43 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
 
             {/* Admin or Secretary: Direct Access to Control Dashboard */}
             {isAdmin || isSecretary ? (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => setIsAdminPanelOpen(true)}
-                  className="flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-cyan-600/20 transition-all cursor-pointer"
+                  className="flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-cyan-600/20 transition-all cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <Sliders className="w-4 h-4" />
+                  <Sliders className="w-4 h-4 shrink-0" />
                   <span>لوحة التحكم</span>
                 </button>
                 <button
                   onClick={logout}
                   title="تسجيل الخروج"
-                  className="p-2 bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 rounded-xl border border-slate-700/60 transition-colors cursor-pointer"
+                  className="p-2 bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 rounded-xl border border-slate-700/60 transition-colors cursor-pointer shrink-0"
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
               </div>
             ) : currentUser ? (
               /* Student logged in */
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2.5 shrink-0">
                 <button
                   onClick={() => setActiveTab('wallet')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-950/60 border border-cyan-700/40 hover:border-cyan-500/60 text-cyan-300 text-xs font-semibold rounded-xl transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-950/60 border border-cyan-700/40 hover:border-cyan-500/60 text-cyan-300 text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <Wallet className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>{currentUser.walletBalance} ج.م</span>
+                  <Wallet className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span className="tabular-nums">{currentUser.walletBalance} ج.م</span>
                   <span className="text-[10px] text-cyan-500 bg-cyan-400/10 px-1.5 py-0.2 rounded">+</span>
                 </button>
 
-                <div className="flex items-center gap-2 ps-2 border-s border-slate-800">
-                  <div className="text-right hidden sm:block">
-                    <p className="text-xs font-bold text-white leading-tight">{currentUser.name}</p>
-                    <p className="text-[10px] text-slate-400">{gradeLabels[currentUser.grade]}</p>
+                <div className="flex items-center gap-2 ps-2 border-s border-slate-800 shrink-0">
+                  <div className="text-right whitespace-nowrap">
+                    <p className="text-xs font-bold text-white leading-tight whitespace-nowrap">{currentUser.name}</p>
+                    <p className="text-[10px] text-slate-400 whitespace-nowrap">{gradeLabels[currentUser.grade]}</p>
                   </div>
                   <button
                     onClick={logout}
                     title="تسجيل الخروج"
-                    className="p-2 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl border border-slate-700/50 transition-colors cursor-pointer"
+                    className="p-2 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl border border-slate-700/50 transition-colors cursor-pointer shrink-0"
                   >
                     <LogOut className="w-4 h-4" />
                   </button>
@@ -218,9 +218,9 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
               /* Guest / Not logged in */
               <button
                 onClick={() => setIsLoginModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-cyan-600/25 cursor-pointer"
+                className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-cyan-600/25 cursor-pointer whitespace-nowrap shrink-0"
               >
-                <User className="w-4 h-4" />
+                <User className="w-4 h-4 shrink-0" />
                 <span>تسجيل الدخول</span>
               </button>
             )}

@@ -400,6 +400,13 @@ html.light[data-color="amber"] .text-cyan-400,
 html.light[data-color="amber"] .text-cyan-300 { color: #b45309 !important; }
 html[data-color="amber"] .border-cyan-400 { border-color: #fbbf24 !important; }
 
+html,
+body {
+  min-width: 1100px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   background-color: var(--bg-main);
   color: var(--text-main);
