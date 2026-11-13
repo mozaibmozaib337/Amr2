@@ -95,8 +95,8 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
   ];
 
   return (
-    <div className="bg-[#0a1224] border-b border-cyan-950/40 sticky top-[73px] z-30">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="bg-[#0a1224] border-b border-cyan-950/40 sticky top-14 md:top-[73px] z-20">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between overflow-x-auto no-scrollbar py-2 gap-1 md:gap-2">
           
           <div className="flex items-center gap-1 md:gap-2 shrink-0">

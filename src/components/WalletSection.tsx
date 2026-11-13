@@ -39,15 +39,15 @@ export const WalletSection: React.FC = () => {
     <div className="space-y-6 animate-fade-in max-w-4xl mx-auto">
       
       {/* Header & Balance Card */}
-      <div className="p-6 sm:p-8 bg-gradient-to-r from-[#0c1c3f] to-[#091329] border border-cyan-800/40 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-6 shadow-xl">
+      <div className="p-5 sm:p-8 bg-gradient-to-r from-[#0c1c3f] to-[#091329] border border-cyan-800/40 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-6 shadow-xl">
         <div className="space-y-2 text-center sm:text-right">
-          <span className="text-xs text-cyan-400 font-semibold tracking-wide">
+          <span className="text-xs sm:text-sm text-cyan-400 font-semibold tracking-wide">
             محفظتي الإلكترونية التعليمية
           </span>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
+          <h2 className="text-[22px] sm:text-3xl font-extrabold text-white">
             رصيدك المتاح: <span className="font-mono text-cyan-400">{currentUser?.walletBalance || 0}</span> ج.م
           </h2>
-          <p className="text-xs text-slate-300">
+          <p className="text-[14px] text-slate-300 leading-relaxed">
             يمكنك استخدام رصيد المحفظة للاشتراك في كورسات ومحاضرات مادة الكيمياء.
           </p>
         </div>
@@ -58,12 +58,12 @@ export const WalletSection: React.FC = () => {
       </div>
 
       {/* Recharge Form */}
-      <div className="p-6 bg-[#091224] border border-slate-800 rounded-2xl space-y-4">
+      <div className="p-5 sm:p-6 bg-[#091224] border border-slate-800 rounded-2xl space-y-4">
         <div className="flex items-center gap-2">
-          <CreditCard className="w-5 h-5 text-cyan-400" />
-          <h3 className="text-base font-bold text-white">شحن الرصيد بواسطة كود الكارت الفوري</h3>
+          <CreditCard className="w-5 h-5 text-cyan-400 shrink-0" />
+          <h3 className="text-base sm:text-lg font-bold text-white">شحن الرصيد بواسطة كود الكارت الفوري</h3>
         </div>
-        <p className="text-xs text-slate-400">
+        <p className="text-[14px] text-slate-400 leading-relaxed">
           أدخل كود الشحن الذي حصلت عليه من السنتر أو منافذ البيع لشحن رصيدك فوراً في المحفظة.
         </p>
 
@@ -77,13 +77,13 @@ export const WalletSection: React.FC = () => {
               setNotice(null);
             }}
             placeholder="أدخل كود الشحن هنا (مثال: CHEM-100)"
-            className="flex-1 bg-[#060b18] border border-slate-700/80 focus:border-cyan-400 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none uppercase font-mono"
+            className="flex-1 min-h-[44px] bg-[#060b18] border border-slate-700/80 focus:border-cyan-400 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none uppercase font-mono"
             dir="ltr"
           />
 
           <button
             type="submit"
-            className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md shadow-cyan-600/25 cursor-pointer shrink-0"
+            className="min-h-[44px] px-6 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-cyan-600/25 cursor-pointer shrink-0"
           >
             تفعيل وشحن الكود
           </button>

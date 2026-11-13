@@ -231,6 +231,10 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       provider: data.provider || 'youtube',
       external_id: data.external_id || null,
       original_url: data.original_url || data.videoUrl || data.video_url || null,
+      cover_image_url: data.coverImageUrl || data.cover_image_url || undefined,
+      instructions: data.instructions || undefined,
+      schedule_text: data.scheduleText || data.schedule_text || undefined,
+      lessons: Array.isArray(data.lessons) ? data.lessons : undefined,
     };
   }
 
@@ -244,6 +248,9 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       provider: data.provider || 'drive',
       external_id: data.external_id || null,
       original_url: data.original_url || data.fileUrl || data.file_url || null,
+      category: data.category || undefined,
+      lesson_title: data.lessonTitle || data.lesson_title || undefined,
+      course_id: data.courseId || data.course_id || undefined,
     };
   }
 
@@ -351,6 +358,10 @@ function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
     if (partial.provider !== undefined) out.provider = partial.provider;
     if (partial.external_id !== undefined) out.external_id = partial.external_id;
     if (partial.original_url !== undefined) out.original_url = partial.original_url;
+    if (partial.coverImageUrl !== undefined) out.cover_image_url = partial.coverImageUrl;
+    if (partial.instructions !== undefined) out.instructions = partial.instructions;
+    if (partial.scheduleText !== undefined) out.schedule_text = partial.scheduleText;
+    if (partial.lessons !== undefined) out.lessons = partial.lessons;
     return out;
   }
 
@@ -456,6 +467,10 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
       provider: row.provider || base.provider || (isDrive ? 'drive' : extId ? 'youtube' : 'other'),
       external_id: resolvedDriveId || extId,
       original_url: row.original_url || base.original_url || videoUrl,
+      coverImageUrl: row.cover_image_url || row.coverImageUrl || base.coverImageUrl || undefined,
+      instructions: row.instructions ?? base.instructions ?? undefined,
+      scheduleText: row.schedule_text || row.scheduleText || base.scheduleText || undefined,
+      lessons: Array.isArray(row.lessons) && row.lessons.length > 0 ? row.lessons : base.lessons || undefined,
     };
   }
 
@@ -472,6 +487,8 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
       id: base.id || String(row.id),
       title: row.title || base.title || 'مذكرة كيمياء',
       category: row.category || base.category || 'مذكرات الشرح',
+      lessonTitle: row.lesson_title || row.lessonTitle || base.lessonTitle || undefined,
+      courseId: row.course_id || row.courseId || base.courseId || undefined,
       grade: row.grade || base.grade || 'sec3',
       fileUrl,
       fileName: row.file_name || base.fileName || `${row.title || 'document'}.pdf`,
@@ -712,6 +729,93 @@ export async function upsertStudentProfileInSupabase(
     missingColumns: missingColumns.length > 0 ? missingColumns : undefined,
     error: !savedToSupabase && !savedToServer ? supaErrorMsg || 'تعذر الحفظ في قاعدة البيانات السحابية' : undefined,
   };
+}
+
+/**
+ * Permanently delete a student profile from Supabase `profiles` (plus dependent rows) and memory cache
+ */
+export async function deleteStudentProfileInSupabase(student: {
+  id: string;
+  email?: string;
+  phone?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const cleanUuid = ensureUuid(student.id);
+  const cleanPhone = (student.phone || '').trim();
+  const cleanEmail = (student.email || '').trim().toLowerCase();
+
+  try {
+    const existing = getMemoryCache<RegisteredAccount>('registered_accounts') || [];
+    const filtered = existing.filter((acc) => {
+      if (acc.id === student.id || ensureUuid(acc.id) === cleanUuid) return false;
+      if (cleanEmail && acc.email?.toLowerCase() === cleanEmail && acc.role !== 'admin') return false;
+      if (cleanPhone && acc.phone?.trim() === cleanPhone && acc.role !== 'admin') return false;
+      return true;
+    });
+    setMemoryCache('registered_accounts', filtered);
+  } catch {}
+
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      return { success: true };
+    }
+
+    // 1. Clean dependent payment_requests first so foreign keys never block profile deletion
+    try {
+      await supabase.from('payment_requests').delete().eq('user_id', cleanUuid);
+    } catch {}
+
+    // 2. Delete from profiles by UUID (and phone/email safeguards for non-admin accounts)
+    const { error: idErr } = await supabase.from('profiles').delete().eq('id', cleanUuid);
+
+    if (cleanPhone && cleanPhone !== '01069780486') {
+      try {
+        await supabase.from('profiles').delete().eq('phone', cleanPhone).neq('role', 'admin');
+      } catch {}
+    }
+
+    if (cleanEmail && cleanEmail !== 'amr12345@gmail.com' && cleanEmail !== 'amr.elsayed@chemistry.edu') {
+      try {
+        await supabase.from('profiles').delete().eq('email', cleanEmail).neq('role', 'admin');
+      } catch {}
+    }
+
+    if (idErr) {
+      console.warn('[Supabase profiles delete notice]:', idErr);
+      return { success: false, error: idErr.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'تعذر حذف الطالب من Supabase' };
+  }
+}
+
+/**
+ * Clear all non-admin student profiles from Supabase `profiles` and memory cache
+ */
+export async function clearAllStudentProfilesInSupabase(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const existing = getMemoryCache<RegisteredAccount>('registered_accounts') || [];
+    setMemoryCache(
+      'registered_accounts',
+      existing.filter((acc) => acc.role === 'admin' || acc.role === 'secretary')
+    );
+  } catch {}
+
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return { success: true };
+    try {
+      await supabase.from('payment_requests').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    } catch {}
+    const { error } = await supabase.from('profiles').delete().eq('role', 'student');
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'تعذر إفراغ جدول الطلاب في Supabase' };
+  }
 }
 
 /**

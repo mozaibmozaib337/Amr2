@@ -56,7 +56,7 @@ import {
   Printer,
   Gift,
 } from 'lucide-react';
-import { GradeLevel, Question, Lecture, Exam, Homework, PaymentMethod, HonoredStudent, FileDocument, SubscriptionType, StudentDossier, UploadProgressInfo, TeacherProfile } from '../types';
+import { GradeLevel, Question, Lecture, Exam, Homework, PaymentMethod, HonoredStudent, FileDocument, SubscriptionType, StudentDossier, UploadProgressInfo, TeacherProfile, CourseLesson } from '../types';
 import { QuestionReviewEditor } from './QuestionReviewEditor';
 import { optimizeImageForAi } from '../utils/fileOptimizer';
 import { uploadFileWithRealProgress, probeVideoDuration } from '../utils/realUploader';
@@ -64,11 +64,13 @@ import { GeminiTeacherDashboard } from './GeminiTeacherDashboard';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient, resetAiConnection, parseScientificQuestionsLocally } from '../utils/aiClientService';
 import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials, testSupabaseSchemaHealth } from '../services/supabaseService';
-import { Database, Link2, Copy } from 'lucide-react';
+import { Database, Link2, Copy, Layers } from 'lucide-react';
 import { parseYouTubeUrl, parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
 import { TopRankingsDirectorySection } from './TopRankingsDirectorySection';
 import { StudentDirectorySection } from './StudentDirectorySection';
 import { buildWhatsAppUrl, openExternalSafe } from '../utils/safeExternalLink';
+import { CourseCurriculumManager } from './CourseCurriculumManager';
+import { getCourseLessons } from '../utils/courseCovers';
 
 
 
@@ -200,6 +202,8 @@ export const AdminPanelModal: React.FC = () => {
   const [surveillanceSearch, setSurveillanceSearch] = useState('');
   const [surveillanceGrade, setSurveillanceGrade] = useState<GradeLevel | 'all'>('all');
   const [selectedStudentForDossier, setSelectedStudentForDossier] = useState<string | null>(null);
+  const [confirmDeleteStudentId, setConfirmDeleteStudentId] = useState<string | null>(null);
+  const [confirmClearAllStudents, setConfirmClearAllStudents] = useState(false);
   const [showRadarAddForm, setShowRadarAddForm] = useState(false);
   const [radarStdName, setRadarStdName] = useState('');
   const [radarStdPhone, setRadarStdPhone] = useState('');
@@ -245,6 +249,13 @@ export const AdminPanelModal: React.FC = () => {
   const [videoFileUrl, setVideoFileUrl] = useState('');
   const [videoUploadProgress, setVideoUploadProgress] = useState<UploadProgressInfo | null>(null);
   const [docUploadProgress, setDocUploadProgress] = useState<UploadProgressInfo | null>(null);
+  const [showNewCourseCurriculum, setShowNewCourseCurriculum] = useState(false);
+  const [newCourseMeta, setNewCourseMeta] = useState<{
+    coverImageUrl?: string;
+    instructions?: string;
+    scheduleText?: string;
+    lessons?: CourseLesson[];
+  }>({});
 
   // Teacher Profile Editing State
   const [profName, setProfName] = useState(teacherProfile?.name || 'مستر عمرو السيد');
@@ -309,7 +320,9 @@ export const AdminPanelModal: React.FC = () => {
 
   // File Form (from Local Device Files)
   const [fileTitle, setFileTitle] = useState('');
-  const [fileCategory, setFileCategory] = useState('شرح');
+  const [fileCategory, setFileCategory] = useState('مذكرات الشرح');
+  const [fileLessonTitle, setFileLessonTitle] = useState('');
+  const [fileCourseId, setFileCourseId] = useState('');
   const [fileGrade, setFileGrade] = useState<GradeLevel>('sec3');
   const [fileDesc, setFileDesc] = useState('');
   const [docFileObj, setDocFileObj] = useState<File | null>(null);
@@ -1284,8 +1297,9 @@ export const AdminPanelModal: React.FC = () => {
       finalFileSize = parsed.provider === 'drive' ? 'Google Drive HD' : 'YouTube HD';
     }
 
-    if (!finalVideoUrl && !videoFileObj) {
-      showNotice('يرجى اختيار ملف فيديو أو إدخال رابط يوتيوب أو جوجل درايف صالح.');
+    const hasHierarchyLessons = Array.isArray(newCourseMeta.lessons) && newCourseMeta.lessons.length > 0;
+    if (!finalVideoUrl && !videoFileObj && !hasHierarchyLessons) {
+      showNotice('يرجى اختيار ملف فيديو أو إدخال رابط يوتيوب/جوجل درايف أو إضافة محاضرات داخل الكورس.');
       return;
     }
 
@@ -1303,6 +1317,10 @@ export const AdminPanelModal: React.FC = () => {
             : 'video_lecture.mp4'),
         videoFileSize: finalFileSize,
         description: videoDesc,
+        coverImageUrl: newCourseMeta.coverImageUrl,
+        instructions: newCourseMeta.instructions,
+        scheduleText: newCourseMeta.scheduleText,
+        lessons: hasHierarchyLessons ? newCourseMeta.lessons : undefined,
         price: isVideoFree ? 0 : (Number(videoPrice) || 50),
         isFree: isVideoFree,
         provider,
@@ -1323,7 +1341,9 @@ export const AdminPanelModal: React.FC = () => {
       setVideoFileUrl('');
       setVideoDesc('');
       setIsVideoFree(false);
-      showNotice('⚡ تم حفظ المحاضرة بنجاح في قاعدة البيانات Supabase!');
+      setNewCourseMeta({});
+      setShowNewCourseCurriculum(false);
+      showNotice('⚡ تم حفظ الكورس والمحاضرات بنجاح في قاعدة البيانات Supabase!');
     } catch (err: any) {
       console.error('[AdminPanel AddLecture Exception]:', err);
       showNotice(`❌ خطأ غير متوقع: ${err?.message || err}`);
@@ -1411,7 +1431,9 @@ export const AdminPanelModal: React.FC = () => {
     try {
       const res = await addFile({
         title: fileTitle.trim(),
-        category: fileCategory,
+        category: fileCategory.trim() || 'مذكرات الشرح',
+        lessonTitle: fileLessonTitle.trim() || undefined,
+        courseId: fileCourseId || undefined,
         grade: fileGrade,
         fileUrl: finalUrl || '',
         fileName: docFileObj?.name || `${fileTitle.trim()}.pdf`,
@@ -1431,6 +1453,8 @@ export const AdminPanelModal: React.FC = () => {
       }
 
       setFileTitle('');
+      setFileLessonTitle('');
+      setFileCourseId('');
       setDocFileObj(null);
       setDocFileUrl('');
       setFileDesc('');
@@ -1889,20 +1913,40 @@ export const AdminPanelModal: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm('⚠️ تحذير: هل أنت متأكد من رغبتك في حذف وإفراغ كشف الطلاب بالكامل من الرادار والمنصة؟\nسيتم حذف جميع الطلاب دفعة واحدة ولن يتبقى سوى حسابك الرئيسي (مستر عمرو السيد).')) {
-                        clearAllStudents();
-                        showNotice('تم إفراغ ومسح جميع الطلاب بنجاح! الكشف نظيف ومفرغ 100% الآن.');
-                      }
-                    }}
-                    className="px-3.5 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
-                    title="حذف جميع الطلاب المخزنين دفعة واحدة"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span>🗑️ مسح وإفراغ كشف الطلاب بالكامل (تصفير)</span>
-                  </button>
+                  {confirmClearAllStudents ? (
+                    <div className="flex items-center gap-2 bg-red-950/70 border border-red-500/60 px-3 py-1.5 rounded-xl">
+                      <span className="text-[11px] font-bold text-red-200">تأكيد مسح جميع الطلاب نهائياً؟</span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await clearAllStudents();
+                          setConfirmClearAllStudents(false);
+                          setSelectedStudentForDossier(null);
+                          showNotice('تم إفراغ ومسح جميع الطلاب نهائياً من الرادار وقاعدة البيانات!');
+                        }}
+                        className="px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold rounded-lg cursor-pointer"
+                      >
+                        نعم، امسح الكل
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearAllStudents(false)}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-lg cursor-pointer"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearAllStudents(true)}
+                      className="px-3.5 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                      title="حذف جميع الطلاب المخزنين دفعة واحدة"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>مسح وإفراغ كشف الطلاب بالكامل (تصفير)</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2351,18 +2395,41 @@ export const AdminPanelModal: React.FC = () => {
                                   <MessageSquare className="w-3.5 h-3.5" />
                                 </button>
 
-                                <button
-                                  onClick={() => {
-                                    if (window.confirm(`هل أنت متأكد من حذف الطالب (${st.name}) نهائياً من الرادار والمنصة؟`)) {
-                                      deleteRegisteredStudent(st.id);
-                                      showNotice(`تم حذف الطالب (${st.name}) نهائياً من الرادار والمنصة!`);
-                                    }
-                                  }}
-                                  className="p-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg border border-red-500/30 text-[11px] font-bold cursor-pointer transition-colors"
-                                  title="حذف الطالب نهائياً من الرادار والمنصة"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                {confirmDeleteStudentId === `radar_${st.id}` ? (
+                                  <div className="flex items-center gap-1 bg-red-950/80 border border-red-500/60 px-2 py-1 rounded-lg">
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const res = await deleteRegisteredStudent(st.id);
+                                        setConfirmDeleteStudentId(null);
+                                        if (res.success) {
+                                          showNotice(`تم حذف الطالب (${st.name}) نهائياً من المنصة وقاعدة البيانات!`);
+                                        } else {
+                                          showNotice(`تم حذف الطالب من العرض، ملاحظة السحابة: ${res.error || 'تحقق من الاتصال'}`);
+                                        }
+                                      }}
+                                      className="px-2 py-0.5 bg-red-600 hover:bg-red-500 text-white rounded text-[10px] font-bold cursor-pointer"
+                                    >
+                                      تأكيد
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteStudentId(null)}
+                                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-bold cursor-pointer"
+                                    >
+                                      إلغاء
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteStudentId(`radar_${st.id}`)}
+                                    className="p-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg border border-red-500/30 text-[11px] font-bold cursor-pointer transition-colors"
+                                    title="حذف الطالب نهائياً من الرادار والمنصة"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -2510,20 +2577,43 @@ export const AdminPanelModal: React.FC = () => {
                       <div className="pt-3 border-t border-cyan-900/40 flex flex-col sm:flex-row items-center justify-between gap-2.5">
                         <span className="text-[11px] text-slate-400">إرسال التقرير بنقرة واحدة لولي الأمر مباشرة:</span>
                         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (window.confirm(`هل أنت متأكد من رغبتك في حذف الطالب (${dossier.student.name}) نهائياً من الرادار والمنصة بالكامل؟`)) {
-                                deleteRegisteredStudent(dossier.student.id);
-                                setSelectedStudentForDossier(null);
-                                showNotice(`تم حذف الطالب (${dossier.student.name}) نهائياً من الرادار والمنصة!`);
-                              }
-                            }}
-                            className="w-full sm:w-auto px-3.5 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/40 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>حذف الطالب نهائياً من الرادار 🗑️</span>
-                          </button>
+                          {confirmDeleteStudentId === `dossier_${dossier.student.id}` ? (
+                            <div className="flex items-center gap-2 bg-red-950/80 border border-red-500/60 px-3 py-1.5 rounded-xl">
+                              <span className="text-[11px] font-bold text-red-200">حذف نهائي؟</span>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const res = await deleteRegisteredStudent(dossier.student.id);
+                                  setConfirmDeleteStudentId(null);
+                                  setSelectedStudentForDossier(null);
+                                  if (res.success) {
+                                    showNotice(`تم حذف الطالب (${dossier.student.name}) نهائياً من المنصة وقاعدة البيانات!`);
+                                  } else {
+                                    showNotice(`تم حذف الطالب من المنصة. ملاحظة السحابة: ${res.error || 'تحقق من الاتصال'}`);
+                                  }
+                                }}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-lg cursor-pointer"
+                              >
+                                تأكيد الحذف
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteStudentId(null)}
+                                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg cursor-pointer"
+                              >
+                                إلغاء
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteStudentId(`dossier_${dossier.student.id}`)}
+                              className="w-full sm:w-auto px-3.5 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/40 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>حذف الطالب نهائياً من الرادار</span>
+                            </button>
+                          )}
 
                           <button
                             type="button"
@@ -2761,9 +2851,44 @@ export const AdminPanelModal: React.FC = () => {
                     rows={2}
                     value={videoDesc}
                     onChange={(e) => setVideoDesc(e.target.value)}
-                    placeholder="اكتب وصف الدرس ومخرجات التعلم..."
+                    placeholder="اكتب وصف الكورس ومخرجات التعلم..."
                     className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                   />
+                </div>
+
+                {/* Hierarchical Curriculum Builder Toggle */}
+                <div className="border-t border-slate-800 pt-3 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCourseCurriculum((prev) => !prev)}
+                    className="w-full py-2.5 px-4 rounded-xl bg-cyan-950/50 border border-cyan-700/50 hover:border-cyan-400 text-cyan-300 text-xs font-bold flex items-center justify-between cursor-pointer transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-cyan-400" />
+                      <span>
+                        إعداد غلاف الكورس، المحاضرات، والأقسام الفرعية (شرح / واجب / اختبار / كتب خارجية)
+                      </span>
+                    </span>
+                    <span>
+                      {showNewCourseCurriculum
+                        ? 'إخفاء المحرر ▲'
+                        : `فتح المحرر (${newCourseMeta.lessons?.length || 0} محاضرات) ▼`}
+                    </span>
+                  </button>
+
+                  {showNewCourseCurriculum && (
+                    <CourseCurriculumManager
+                      course={{
+                        title: videoTitle,
+                        chapterTitle: videoChapter,
+                        coverImageUrl: newCourseMeta.coverImageUrl,
+                        instructions: newCourseMeta.instructions,
+                        scheduleText: newCourseMeta.scheduleText,
+                        lessons: newCourseMeta.lessons,
+                      }}
+                      onChange={(patch) => setNewCourseMeta((prev) => ({ ...prev, ...patch }))}
+                    />
+                  )}
                 </div>
 
                 <button
@@ -2771,64 +2896,93 @@ export const AdminPanelModal: React.FC = () => {
                   className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs rounded-xl transition-all shadow-md cursor-pointer flex items-center gap-2"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  <span>حفظ وإضافة الفيديو للمنصة</span>
+                  <span>حفظ وإضافة الكورس للمنصة</span>
                 </button>
               </form>
 
-              {/* Videos List with Edit & Delete */}
+              {/* Courses List with Hierarchical Curriculum Edit & Delete */}
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
-                  جميع الفيديوهات المضافة ({lectures.length})
+                  جميع الكورسات والمحاضرات المضافة ({lectures.length})
                 </h4>
 
                 {lectures.length === 0 ? (
                   <p className="text-xs text-slate-500 p-4 bg-[#080d1b] rounded-xl text-center">
-                    لا توجد أي فيديوهات مضافة بعد.
+                    لا توجد أي كورسات مضافة بعد.
                   </p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {lectures.map((lec) => (
-                      <div
-                        key={lec.id}
-                        className="bg-[#080d1b] border border-slate-800 p-3.5 rounded-xl flex flex-col justify-between"
-                      >
-                        <div>
-                          <div className="flex items-center justify-between text-[11px] text-cyan-400 mb-1">
-                            <span>{lec.chapterTitle}</span>
-                            <span>{lec.price} ج.م</span>
+                    {lectures.map((lec) => {
+                      const lessonsCount = getCourseLessons(lec).length;
+                      return (
+                        <div
+                          key={lec.id}
+                          className="bg-[#080d1b] border border-slate-800 p-3.5 rounded-xl flex flex-col justify-between"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between text-[11px] text-cyan-400 mb-1">
+                              <span>{lec.chapterTitle}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded tabular-nums">
+                                  {lessonsCount} {lessonsCount === 1 ? 'محاضرة' : 'محاضرات'}
+                                </span>
+                                <span className="font-bold tabular-nums">{lec.price} ج.م</span>
+                              </div>
+                            </div>
+                            <h5 className="font-bold text-xs text-white line-clamp-1">{lec.title}</h5>
+                            <p className="text-[11px] text-slate-400 mt-1 line-clamp-2">{lec.description}</p>
                           </div>
-                          <h5 className="font-bold text-xs text-white line-clamp-1">{lec.title}</h5>
-                          <p className="text-[11px] text-slate-400 mt-1 line-clamp-2">{lec.description}</p>
-                        </div>
 
-                        <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/60">
-                          <button
-                            onClick={() => setActiveVideo(lec)}
-                            className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 font-semibold cursor-pointer"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>تشغيل في المشغل المدمج</span>
-                          </button>
+                          <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/60 gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingLecture({
+                                  ...lec,
+                                  lessons: getCourseLessons(lec),
+                                })
+                              }
+                              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-600 hover:text-white font-bold cursor-pointer transition-colors"
+                            >
+                              <Layers className="w-3.5 h-3.5" />
+                              <span>إدارة المحاضرات والأقسام</span>
+                            </button>
 
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => setEditingLecture(lec)}
-                              className="p-1 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
-                              title="تعديل الفيديو والمحاضرة بالكامل"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => deleteLecture(lec.id)}
-                              className="p-1 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
-                              title="حذف"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setActiveVideo(lec)}
+                                className="p-1 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
+                                title="تشغيل سريع في المشغل"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditingLecture({
+                                    ...lec,
+                                    lessons: getCourseLessons(lec),
+                                  })
+                                }
+                                className="p-1 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
+                                title="تعديل الكورس بالكامل"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteLecture(lec.id)}
+                                className="p-1 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
+                                title="حذف"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -3826,8 +3980,8 @@ export const AdminPanelModal: React.FC = () => {
                 </div>
 
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="sm:col-span-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
                     <label className="block text-xs text-slate-300 mb-1">اسم المذكرة أو المستند</label>
                     <input
                       type="text"
@@ -3835,37 +3989,72 @@ export const AdminPanelModal: React.FC = () => {
                       value={fileTitle}
                       onChange={(e) => setFileTitle(e.target.value)}
                       placeholder="مثال: مذكرة شرح الباب الأول وتلخيص معادلات الحديد"
-                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs text-slate-300 mb-1">نوع القسم</label>
-                    <select
+                    <label className="block text-xs text-slate-300 mb-1">القسم الفرعي / التصنيف (يدعم الأسماء المخصصة)</label>
+                    <input
+                      type="text"
+                      list="file-category-presets"
                       value={fileCategory}
                       onChange={(e) => setFileCategory(e.target.value)}
-                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
-                    >
-                      <option value="شرح">مذكرة شرح</option>
-                      <option value="مراجعة">مراجعة نهائية</option>
-                      <option value="امتحانات">نماذج امتحانات</option>
-                      <option value="مفاهيم">ورقة مفاهيم وملخصات</option>
-                      <option value="جدول بيانات">جدول بيانات إكسل</option>
-                    </select>
+                      placeholder="مثال: حل كتاب مندليف، مذكرات الشرح..."
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    />
+                    <datalist id="file-category-presets">
+                      <option value="مذكرات الشرح" />
+                      <option value="حل كتاب مندليف" />
+                      <option value="حل كتاب الامتحان" />
+                      <option value="ما ورد في امتحانات ثانوية عامة" />
+                      <option value="مذكرات المراجعة" />
+                      <option value="نماذج امتحانات" />
+                      <option value="ورقة مفاهيم وملخصات" />
+                    </datalist>
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs text-slate-300 mb-1">الصف الدراسي</label>
-                  <select
-                    value={fileGrade}
-                    onChange={(e) => setFileGrade(e.target.value as GradeLevel)}
-                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
-                  >
-                    <option value="sec3">الصف الثالث الثانوي</option>
-                    <option value="sec2">الصف الثاني الثانوي</option>
-                    <option value="sec1">الصف الأول الثانوي</option>
-                  </select>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">الدرس / المحاضرة التابع لها (للعرض الهرمي المنسدل)</label>
+                    <input
+                      type="text"
+                      value={fileLessonTitle}
+                      onChange={(e) => setFileLessonTitle(e.target.value)}
+                      placeholder="مثال: الدرس الأول: العناصر الانتقالية"
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">ربط بكورس معين (اختياري)</label>
+                    <select
+                      value={fileCourseId}
+                      onChange={(e) => setFileCourseId(e.target.value)}
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    >
+                      <option value="">ملف عام بقسم المذكرات</option>
+                      {lectures.map((lec) => (
+                        <option key={lec.id} value={lec.id}>
+                          {lec.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">الصف الدراسي</label>
+                    <select
+                      value={fileGrade}
+                      onChange={(e) => setFileGrade(e.target.value as GradeLevel)}
+                      className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    >
+                      <option value="sec3">الصف الثالث الثانوي</option>
+                      <option value="sec2">الصف الثاني الثانوي</option>
+                      <option value="sec1">الصف الأول الثانوي</option>
+                    </select>
+                  </div>
                 </div>
 
                 <button
@@ -3898,7 +4087,10 @@ export const AdminPanelModal: React.FC = () => {
                           <FileText className="w-5 h-5 text-cyan-400 shrink-0" />
                           <div>
                             <h5 className="font-bold text-white line-clamp-1">{file.title}</h5>
-                            <span className="text-[10px] text-slate-400">{file.category} · {file.fileType}</span>
+                            <span className="text-[10px] text-slate-400">
+                              {file.lessonTitle ? `${file.lessonTitle} · ` : ''}
+                              {file.category} · {file.fileType}
+                            </span>
                           </div>
                         </div>
 
@@ -4450,19 +4642,42 @@ export const AdminPanelModal: React.FC = () => {
                                   </button>
 
                                   {/* Delete Student */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (confirm(`هل أنت متأكد من حذف الطالب "${std.name}" نهائياً من المنصة؟`)) {
-                                        deleteRegisteredStudent(std.id);
-                                        showNotice(`تم حذف الطالب "${std.name}" نهائياً من المنصة.`);
-                                      }
-                                    }}
-                                    className="p-1.5 bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white rounded-xl transition-colors cursor-pointer"
-                                    title="حذف الطالب نهائياً"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
+                                  {confirmDeleteStudentId === `dir_${std.id}` ? (
+                                    <div className="flex items-center gap-1.5 bg-red-950/80 border border-red-500/60 px-2.5 py-1 rounded-xl">
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const res = await deleteRegisteredStudent(std.id);
+                                          setConfirmDeleteStudentId(null);
+                                          if (res.success) {
+                                            showNotice(`تم حذف الطالب "${std.name}" نهائياً من المنصة وقاعدة البيانات.`);
+                                          } else {
+                                            showNotice(`تم حذف الطالب من الواجهة. ملاحظة السحابة: ${res.error || 'تحقق من الاتصال'}`);
+                                          }
+                                        }}
+                                        className="px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white rounded-lg text-[11px] font-bold cursor-pointer"
+                                      >
+                                        تأكيد الحذف
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmDeleteStudentId(null)}
+                                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold cursor-pointer"
+                                      >
+                                        إلغاء
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteStudentId(`dir_${std.id}`)}
+                                      className="px-2.5 py-1.5 bg-red-500/15 hover:bg-red-600 text-red-400 hover:text-white rounded-xl border border-red-500/30 transition-colors flex items-center gap-1 font-bold text-[11px] cursor-pointer"
+                                      title="حذف الطالب نهائياً"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>حذف</span>
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             );
@@ -6362,7 +6577,14 @@ ALTER TABLE public.assignments
   ADD COLUMN IF NOT EXISTS total_marks integer,
   ADD COLUMN IF NOT EXISTS kind text;
 
--- 3. تفعيل القراءة والكتابة الفورية من أي هاتف أو متصفح جديد (RLS Disable)
+-- 3. تحديث جدول الكورسات لدعم الهيكل الهرمي (المحاضرات والأقسام الفرعية والغلاف)
+ALTER TABLE public.courses
+  ADD COLUMN IF NOT EXISTS lessons jsonb DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS cover_image_url text,
+  ADD COLUMN IF NOT EXISTS instructions text,
+  ADD COLUMN IF NOT EXISTS schedule_text text;
+
+-- 4. تفعيل القراءة والكتابة الفورية من أي هاتف أو متصفح جديد (RLS Disable)
 ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.courses DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.documents DISABLE ROW LEVEL SECURITY;
@@ -6404,22 +6626,23 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
 
       </div>
 
-      {/* MODAL 1: EDIT PUBLISHED LECTURE */}
+      {/* MODAL 1: EDIT PUBLISHED COURSE + HIERARCHICAL LESSONS & SUBSECTIONS */}
       {editingLecture && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in">
-          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
+          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-5">
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-cyan-400" />
-                <span>تعديل المحاضرة المنشورة: {editingLecture.title}</span>
+                <span>تعديل الكورس وإدارة المحاضرات والأقسام: {editingLecture.title}</span>
               </h3>
               <div className="flex items-center gap-2">
                 <span className="hidden sm:inline-block text-[10px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/40 px-2 py-0.5 rounded-full">
                   ✓ حفظ تلقائي فوري في Supabase
                 </span>
                 <button
+                  type="button"
                   onClick={() => setEditingLecture(null)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -6427,24 +6650,26 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
             </div>
 
             <div className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">عنوان المحاضرة</label>
-                <input
-                  type="text"
-                  value={editingLecture.title}
-                  onChange={(e) => setEditingLecture({ ...editingLecture, title: e.target.value })}
-                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
-                />
-              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">عنوان الكورس / المحاضرة</label>
+                  <input
+                    type="text"
+                    value={editingLecture.title}
+                    onChange={(e) => setEditingLecture({ ...editingLecture, title: e.target.value })}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">اسم الباب أو الفصل</label>
-                <input
-                  type="text"
-                  value={editingLecture.chapterTitle}
-                  onChange={(e) => setEditingLecture({ ...editingLecture, chapterTitle: e.target.value })}
-                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
-                />
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">اسم الباب أو الفصل</label>
+                  <input
+                    type="text"
+                    value={editingLecture.chapterTitle}
+                    onChange={(e) => setEditingLecture({ ...editingLecture, chapterTitle: e.target.value })}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -6476,7 +6701,14 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
                   <input
                     type="number"
                     value={editingLecture.price}
-                    onChange={(e) => setEditingLecture({ ...editingLecture, price: Number(e.target.value) || 0 })}
+                    onChange={(e) => {
+                      const nextPrice = Number(e.target.value) || 0;
+                      setEditingLecture({
+                        ...editingLecture,
+                        price: nextPrice,
+                        isFree: nextPrice === 0,
+                      });
+                    }}
                     className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left"
                   />
                 </div>
@@ -6485,7 +6717,7 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">وصف الكورس</label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={editingLecture.description}
                   onChange={(e) => setEditingLecture({ ...editingLecture, description: e.target.value })}
                   className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
@@ -6493,13 +6725,21 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
               </div>
 
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">رابط الفيديو (أو رابط البث)</label>
+                <label className="block text-slate-300 font-semibold mb-1">رابط الفيديو الرئيسي (اختياري)</label>
                 <input
                   type="text"
                   value={editingLecture.videoUrl}
                   onChange={(e) => setEditingLecture({ ...editingLecture, videoUrl: e.target.value })}
                   className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400 text-left font-mono"
                   dir="ltr"
+                />
+              </div>
+
+              {/* Full Hierarchical Lessons & Sub-Sections CRUD Manager */}
+              <div className="pt-2 border-t border-slate-800">
+                <CourseCurriculumManager
+                  course={editingLecture}
+                  onChange={(patch) => setEditingLecture({ ...editingLecture, ...patch })}
                 />
               </div>
             </div>
@@ -6517,7 +6757,7 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
                 onClick={() => {
                   updateLecture(editingLecture.id, editingLecture);
                   setEditingLecture(null);
-                  showNotice('⚡ تم حفظ التعديلات على المحاضرة بنجاح!');
+                  showNotice('⚡ تم حفظ تعديلات الكورس والمحاضرات والأقسام الفرعية بنجاح!');
                 }}
                 className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer transition-colors flex items-center gap-1.5 shadow-md shadow-cyan-600/30"
               >
@@ -6847,14 +7087,43 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
                 />
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">تصنيف الملف / القسم الفرعي</label>
+                  <input
+                    type="text"
+                    list="file-category-presets"
+                    value={editingFile.category}
+                    onChange={(e) => setEditingFile({ ...editingFile, category: e.target.value })}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">الدرس / المحاضرة التابعة لها</label>
+                  <input
+                    type="text"
+                    value={editingFile.lessonTitle || ''}
+                    onChange={(e) => setEditingFile({ ...editingFile, lessonTitle: e.target.value })}
+                    placeholder="مثال: الدرس الأول: العناصر الانتقالية"
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+              </div>
+
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">تصنيف الملف</label>
-                <input
-                  type="text"
-                  value={editingFile.category}
-                  onChange={(e) => setEditingFile({ ...editingFile, category: e.target.value })}
+                <label className="block text-slate-300 font-semibold mb-1">ربط بكورس معين (اختياري)</label>
+                <select
+                  value={editingFile.courseId || ''}
+                  onChange={(e) => setEditingFile({ ...editingFile, courseId: e.target.value || undefined })}
                   className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-400"
-                />
+                >
+                  <option value="">ملف عام بقسم المذكرات</option>
+                  {lectures.map((lec) => (
+                    <option key={lec.id} value={lec.id}>
+                      {lec.title}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -1775,8 +1775,47 @@ app.post('/api/platform-data/patch-item', (req, res) => {
         arr.unshift({ [matchKey]: targetId, ...item });
       }
     } else if (action === 'delete' && targetId) {
-      const filtered = arr.filter((x) => String(x?.[matchKey] || x?.id || x?.code || '') !== targetId);
+      const normalizeId = (val: string) => String(val || '').trim().toLowerCase();
+      const targetPhone = item?.phone ? String(item.phone).trim() : '';
+      const targetEmail = item?.email ? String(item.email).trim().toLowerCase() : '';
+
+      const filtered = arr.filter((x) => {
+        const candidateId = String(x?.[matchKey] || x?.id || x?.code || '');
+        if (candidateId === targetId || normalizeId(candidateId) === normalizeId(targetId)) {
+          return false;
+        }
+        if (collection === 'registeredAccounts') {
+          if (targetPhone && String(x?.phone || '').trim() === targetPhone && x?.role === 'student') {
+            return false;
+          }
+          if (targetEmail && String(x?.email || '').trim().toLowerCase() === targetEmail && x?.role === 'student') {
+            return false;
+          }
+        }
+        return true;
+      });
       store[collection] = filtered;
+
+      if (collection === 'registeredAccounts') {
+        if (store.studentAccessMap && typeof store.studentAccessMap === 'object') {
+          delete store.studentAccessMap[targetId];
+        }
+        if (Array.isArray(store.liveLoginAlerts)) {
+          store.liveLoginAlerts = store.liveLoginAlerts.filter((a: any) => String(a?.studentId || '') !== targetId);
+        }
+        if (Array.isArray(store.authorizedStudents)) {
+          store.authorizedStudents = store.authorizedStudents.filter(
+            (a: any) => String(a?.id || '') !== targetId && (!targetPhone || String(a?.phone || '') !== targetPhone)
+          );
+        }
+        if (Array.isArray(store.studentActivities)) {
+          store.studentActivities = store.studentActivities.filter((a: any) => String(a?.studentId || '') !== targetId);
+        }
+        if (Array.isArray(store.examSubmissions)) {
+          store.examSubmissions = store.examSubmissions.filter((s: any) => String(s?.studentId || '') !== targetId);
+        }
+      }
+
       store.lastUpdatedAt = new Date().toISOString();
       const saved = savePlatformStore(store);
       return res.json({ success: saved, timestamp: store.lastUpdatedAt });

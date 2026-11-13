@@ -81,23 +81,23 @@ export const HomeworkSection: React.FC = () => {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header & Kind Switch */}
-      <div className="p-6 bg-[#091224] border border-cyan-900/30 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="p-5 sm:p-6 bg-[#091224] border border-cyan-900/30 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <BookCheck className="w-5 h-5 text-cyan-400" />
+          <h2 className="text-[20px] sm:text-2xl font-bold text-white flex items-center gap-2">
+            <BookCheck className="w-5 h-5 text-cyan-400 shrink-0" />
             <span>الواجبات المنزلية وشيتات الدروس</span>
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-[14px] text-slate-400 mt-1.5 leading-relaxed">
             الواجبات المنزلية متاحة للاستكمال خلال 24 ساعة من الفتح، وشيتات الدروس محددة بحد أقصى 3 ساعات وتُحسب في قوائم الأوائل.
           </p>
         </div>
 
         {!activeInteractiveHw && (
-          <div className="flex items-center gap-1.5 bg-[#060b18] p-1.5 rounded-2xl border border-slate-800 text-xs font-bold self-start md:self-auto">
+          <div className="flex flex-wrap items-center gap-1.5 bg-[#060b18] p-1.5 rounded-2xl border border-slate-800 text-xs sm:text-sm font-bold self-start md:self-auto">
             <button
               type="button"
               onClick={() => setTypeFilter('all')}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+              className={`min-h-[40px] sm:min-h-0 px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
                 typeFilter === 'all' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -106,7 +106,7 @@ export const HomeworkSection: React.FC = () => {
             <button
               type="button"
               onClick={() => setTypeFilter('homework')}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+              className={`min-h-[40px] sm:min-h-0 px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
                 typeFilter === 'homework' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -115,7 +115,7 @@ export const HomeworkSection: React.FC = () => {
             <button
               type="button"
               onClick={() => setTypeFilter('sheet')}
-              className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+              className={`min-h-[40px] sm:min-h-0 px-3 py-1.5 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
                 typeFilter === 'sheet' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -126,7 +126,7 @@ export const HomeworkSection: React.FC = () => {
       </div>
 
       {successNotice && (
-        <div className="p-3.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
+        <div className="p-3.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-300 text-sm flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{successNotice}</span>
         </div>
@@ -157,12 +157,12 @@ export const HomeworkSection: React.FC = () => {
           }}
         />
       ) : filteredHw.length === 0 ? (
-        <div className="p-12 bg-[#091224] border border-slate-800 rounded-2xl text-center space-y-3">
+        <div className="p-10 sm:p-12 bg-[#091224] border border-slate-800 rounded-2xl text-center space-y-3">
           <div className="w-12 h-12 rounded-full bg-cyan-950 text-cyan-400 flex items-center justify-center mx-auto">
             <BookCheck className="w-6 h-6" />
           </div>
-          <h3 className="text-base font-bold text-white">لا توجد واجبات أو شيتات في هذا القسم حالياً</h3>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+          <h3 className="text-lg font-bold text-white">لا توجد واجبات أو شيتات في هذا القسم حالياً</h3>
+          <p className="text-[14px] text-slate-400 max-w-sm mx-auto">
             سيتم نشر الواجبات وشيتات الدروس بالتزامن مع نزول المحاضرات على المنصة.
           </p>
         </div>
@@ -208,7 +208,7 @@ export const HomeworkSection: React.FC = () => {
                     </span>
 
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${
+                      className={`text-[11px] px-2 py-0.5 rounded-md font-bold ${
                         isSubmitted
                           ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                           : inProgress
@@ -221,19 +221,19 @@ export const HomeworkSection: React.FC = () => {
                   </div>
 
                   {hw.lessonTitle && (
-                    <div className="inline-flex items-center gap-1 text-[11px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 px-2 py-0.5 rounded-md font-semibold">
-                      <BookOpen className="w-3 h-3" />
+                    <div className="inline-flex items-center gap-1 text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 px-2.5 py-0.5 rounded-md font-semibold">
+                      <BookOpen className="w-3.5 h-3.5" />
                       <span>{hw.lessonTitle}</span>
                     </div>
                   )}
 
-                  <h3 className="font-bold text-sm text-white line-clamp-2">{hw.title}</h3>
+                  <h3 className="font-bold text-base text-white line-clamp-2 leading-snug">{hw.title}</h3>
 
-                  <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
+                  <p className="text-[14px] text-slate-400 line-clamp-2 leading-relaxed">
                     {hw.description || 'حل الأسئلة والتدريبات المطلوبة وتسليمها في الموعد المحدد.'}
                   </p>
 
-                  <div className="space-y-1 text-xs text-slate-400 pt-1">
+                  <div className="space-y-1 text-xs sm:text-sm text-slate-400 pt-1">
                     <div className="flex items-center gap-2">
                       <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                       <span>آخر موعد: {hw.deadline}</span>
@@ -254,7 +254,7 @@ export const HomeworkSection: React.FC = () => {
                   </div>
 
                   {isSubmitted && (latestSub || hwAccess?.score !== undefined) && (
-                    <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs flex items-center justify-between text-emerald-300">
+                    <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs sm:text-sm flex items-center justify-between text-emerald-300">
                       <span className="font-bold">الدرجة المسجلة:</span>
                       <span className="font-mono font-black tabular-nums">
                         {latestSub?.score ?? hwAccess?.score ?? 0} / {latestSub?.maxScore ?? hwAccess?.maxScore ?? computedMaxMarks ?? hw.questions?.length ?? 1}
@@ -275,9 +275,9 @@ export const HomeworkSection: React.FC = () => {
                           fileType: hw.fileType,
                         })
                       }
-                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-xl font-semibold transition-colors cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0"
+                      className="min-h-[44px] px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm rounded-xl font-semibold transition-colors cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0"
                     >
-                      <FileText className="w-3.5 h-3.5" />
+                      <FileText className="w-4 h-4 shrink-0" />
                       <span>الملزمة</span>
                     </button>
                   )}
@@ -285,7 +285,7 @@ export const HomeworkSection: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleOpenHw(hw)}
-                    className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    className={`flex-1 min-h-[44px] py-2 text-sm font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                       inProgress
                         ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-md'
                         : isSubmitted && !hasQuestions
@@ -295,17 +295,17 @@ export const HomeworkSection: React.FC = () => {
                   >
                     {inProgress ? (
                       <>
-                        <RotateCcw className="w-3.5 h-3.5" />
+                        <RotateCcw className="w-4 h-4 shrink-0" />
                         <span>استكمال الحل الآن</span>
                       </>
                     ) : hasQuestions ? (
                       <>
-                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <Play className="w-4 h-4 fill-current shrink-0" />
                         <span>{isSubmitted ? 'مراجعة / إعادة فتح' : hwKind === 'sheet' ? 'بدء حل الشيت' : 'بدء حل الواجب'}</span>
                       </>
                     ) : (
                       <>
-                        <Upload className="w-3.5 h-3.5" />
+                        <Upload className="w-4 h-4 shrink-0" />
                         <span>{isSubmitted ? 'تم التسليم' : 'تسليم الحل'}</span>
                       </>
                     )}

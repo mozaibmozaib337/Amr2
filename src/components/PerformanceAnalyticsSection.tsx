@@ -186,10 +186,11 @@ export const PerformanceAnalyticsSection: React.FC = () => {
         </div>
 
         {/* Grade Filter Pills */}
-        <div className="flex items-center gap-1.5 bg-[#060b18] p-1.5 rounded-2xl border border-slate-800 self-start sm:self-auto text-xs font-bold">
+        <div className="flex flex-wrap items-center gap-1.5 bg-[#060b18] p-1.5 rounded-2xl border border-slate-800 self-start sm:self-auto text-xs font-bold">
           <button
+            type="button"
             onClick={() => setSelectedGrade('all')}
-            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+            className={`min-h-[40px] sm:min-h-0 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
               selectedGrade === 'all'
                 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-500/25'
                 : 'text-slate-400 hover:text-white'
@@ -198,8 +199,9 @@ export const PerformanceAnalyticsSection: React.FC = () => {
             كل الصفوف
           </button>
           <button
+            type="button"
             onClick={() => setSelectedGrade('sec3')}
-            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+            className={`min-h-[40px] sm:min-h-0 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
               selectedGrade === 'sec3'
                 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-500/25'
                 : 'text-slate-400 hover:text-white'
@@ -208,8 +210,9 @@ export const PerformanceAnalyticsSection: React.FC = () => {
             3 ثانوي (2026)
           </button>
           <button
+            type="button"
             onClick={() => setSelectedGrade('sec2')}
-            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+            className={`min-h-[40px] sm:min-h-0 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
               selectedGrade === 'sec2'
                 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-500/25'
                 : 'text-slate-400 hover:text-white'
@@ -218,8 +221,9 @@ export const PerformanceAnalyticsSection: React.FC = () => {
             2 ثانوي
           </button>
           <button
+            type="button"
             onClick={() => setSelectedGrade('sec1')}
-            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+            className={`min-h-[40px] sm:min-h-0 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
               selectedGrade === 'sec1'
                 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-500/25'
                 : 'text-slate-400 hover:text-white'
@@ -231,58 +235,58 @@ export const PerformanceAnalyticsSection: React.FC = () => {
       </div>
 
       {/* 4 Metric Highlight Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         
         <div className="p-4 bg-[#070e1f] border border-cyan-900/30 rounded-2xl relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400 font-medium">الطلاب النشطين</span>
+            <span className="text-sm font-semibold text-slate-300">الطلاب النشطين</span>
             <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-xl">
               <Users className="w-4 h-4" />
             </div>
           </div>
           <p className="text-2xl font-extrabold text-white mt-2 font-mono">{totalStudentsCount}</p>
-          <p className="text-[11px] text-cyan-400/90 mt-1 flex items-center gap-1 font-semibold">
-            <CheckCircle2 className="w-3 h-3" />
+          <p className="text-xs text-cyan-400/90 mt-1 flex items-center gap-1 font-semibold">
+            <CheckCircle2 className="w-3.5 h-3.5" />
             <span>طلاب مسجلين بالدليل</span>
           </p>
         </div>
 
         <div className="p-4 bg-[#070e1f] border border-blue-900/30 rounded-2xl relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400 font-medium">متوسط الدرجات</span>
+            <span className="text-sm font-semibold text-slate-300">متوسط الدرجات</span>
             <div className="p-2 bg-blue-500/10 text-blue-400 rounded-xl">
               <Award className="w-4 h-4" />
             </div>
           </div>
           <p className="text-2xl font-extrabold text-white mt-2 font-mono">{avgExamScore}%</p>
-          <p className="text-[11px] text-blue-400/90 mt-1 flex items-center gap-1 font-semibold">
-            <ArrowUpRight className="w-3 h-3" />
+          <p className="text-xs text-blue-400/90 mt-1 flex items-center gap-1 font-semibold">
+            <ArrowUpRight className="w-3.5 h-3.5" />
             <span>معدل تفوق عام بالامتحانات</span>
           </p>
         </div>
 
         <div className="p-4 bg-[#070e1f] border border-emerald-900/30 rounded-2xl relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400 font-medium">نسبة حضور المحاضرات</span>
+            <span className="text-sm font-semibold text-slate-300">نسبة حضور المحاضرات</span>
             <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-xl">
               <BookOpen className="w-4 h-4" />
             </div>
           </div>
           <p className="text-2xl font-extrabold text-white mt-2 font-mono">{overallAttendanceRate}%</p>
-          <p className="text-[11px] text-emerald-400/90 mt-1 flex items-center gap-1 font-semibold">
+          <p className="text-xs text-emerald-400/90 mt-1 flex items-center gap-1 font-semibold">
             <span>التزام منتظم بالدروس</span>
           </p>
         </div>
 
         <div className="p-4 bg-[#070e1f] border border-purple-900/30 rounded-2xl relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400 font-medium">إجمالي التسليمات</span>
+            <span className="text-sm font-semibold text-slate-300">إجمالي التسليمات</span>
             <div className="p-2 bg-purple-500/10 text-purple-400 rounded-xl">
               <BarChart3 className="w-4 h-4" />
             </div>
           </div>
           <p className="text-2xl font-extrabold text-white mt-2 font-mono">{totalSubmissionsCount}</p>
-          <p className="text-[11px] text-purple-400/90 mt-1 flex items-center gap-1 font-semibold">
+          <p className="text-xs text-purple-400/90 mt-1 flex items-center gap-1 font-semibold">
             <span>امتحانات مصححة إلكترونياً</span>
           </p>
         </div>
@@ -292,38 +296,41 @@ export const PerformanceAnalyticsSection: React.FC = () => {
       {/* Chart Selector Tabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
         <button
+          type="button"
           onClick={() => setActiveChartTab('trend')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+          className={`min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeChartTab === 'trend'
               ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-600/20'
               : 'bg-[#060b18] text-slate-400 hover:text-white border border-slate-800'
           }`}
         >
-          <TrendingUp className="w-4 h-4" />
+          <TrendingUp className="w-4 h-4 shrink-0" />
           <span>منحنى تقدم الدرجات عبر الامتحانات</span>
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveChartTab('attendance')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+          className={`min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeChartTab === 'attendance'
               ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-600/20'
               : 'bg-[#060b18] text-slate-400 hover:text-white border border-slate-800'
           }`}
         >
-          <BarChart3 className="w-4 h-4" />
+          <BarChart3 className="w-4 h-4 shrink-0" />
           <span>مقارنة نسب الحضور وإنجاز الواجبات</span>
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveChartTab('distribution')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+          className={`min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeChartTab === 'distribution'
               ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-600/20'
               : 'bg-[#060b18] text-slate-400 hover:text-white border border-slate-800'
           }`}
         >
-          <PieIcon className="w-4 h-4" />
+          <PieIcon className="w-4 h-4 shrink-0" />
           <span>توزيع مستويات الطلاب (ممتاز / جيد / دعم)</span>
         </button>
       </div>

@@ -653,7 +653,7 @@ export const DocumentViewerModal: React.FC = () => {
             }}
           >
             {/* UNDERLYING DOCUMENT: PDF / Word / Excel / Image */}
-            <div className="bg-[#0b1429] min-w-[750px] min-h-[1050px] text-slate-100 relative">
+            <div className="bg-[#0b1429] w-full md:min-w-[750px] min-h-[1050px] text-slate-100 relative">
               {isExcel ? (
                 /* Excel Spreadsheet View */
                 <div className="p-6 bg-[#0a1428] border border-cyan-900/40 rounded-xl space-y-4">

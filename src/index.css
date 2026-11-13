@@ -402,7 +402,8 @@ html[data-color="amber"] .border-cyan-400 { border-color: #fbbf24 !important; }
 
 html,
 body {
-  min-width: 1100px;
+  max-width: 100%;
+  overflow-x: clip;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -411,6 +412,21 @@ body {
   background-color: var(--bg-main);
   color: var(--text-main);
   transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media (max-width: 767px) {
+  body {
+    font-size: 15px;
+    line-height: 1.65;
+  }
 }
 
 /* Custom subtle scrollbar */

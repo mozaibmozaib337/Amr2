@@ -44,6 +44,8 @@ import {
   findStudentProfileInSupabase,
   fetchAllProfilesFromSupabase,
   upsertStudentProfileInSupabase,
+  deleteStudentProfileInSupabase,
+  clearAllStudentProfilesInSupabase,
   purgeLegacyLocalCaches,
   ensureUuid,
 } from '../services/supabaseService';
@@ -218,8 +220,8 @@ interface PlatformContextType {
     walletBalance?: number;
   }) => RegisteredAccount;
   updateRegisteredStudent: (id: string, data: Partial<RegisteredAccount>) => void;
-  deleteRegisteredStudent: (id: string) => void;
-  clearAllStudents: () => void;
+  deleteRegisteredStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
+  clearAllStudents: () => Promise<void>;
   // Live Student Logins Alerts (إشعارات دخول الطلاب اللحظية للمستر)
   liveLoginAlerts: LiveLoginAlert[];
   dismissLoginAlert: (alertId: string) => void;
@@ -494,7 +496,30 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (data) {
           if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
           if (data.teacherProfile) setTeacherProfile((prev) => ({ ...prev, ...data.teacherProfile }));
-          if (Array.isArray(data.lectures) && data.lectures.length > 0) setLectures(data.lectures);
+          if (Array.isArray(data.lectures) && data.lectures.length > 0) {
+            setLectures((prev) => {
+              const map = new Map<string, Lecture>();
+              prev.forEach((l) => map.set(ensureUuid(l.id), l));
+              data.lectures.forEach((inc: Lecture) => {
+                const k = ensureUuid(inc.id);
+                const ex = map.get(k);
+                map.set(
+                  k,
+                  ex
+                    ? {
+                        ...ex,
+                        ...inc,
+                        lessons: inc.lessons && inc.lessons.length > 0 ? inc.lessons : ex.lessons,
+                        coverImageUrl: inc.coverImageUrl || ex.coverImageUrl,
+                        instructions: inc.instructions ?? ex.instructions,
+                        scheduleText: inc.scheduleText || ex.scheduleText,
+                      }
+                    : inc
+                );
+              });
+              return Array.from(map.values());
+            });
+          }
           if (Array.isArray(data.homeworks) && data.homeworks.length > 0) setHomeworks(data.homeworks);
           if (Array.isArray(data.files) && data.files.length > 0) setFiles(data.files);
           if (Array.isArray(data.exams) && data.exams.length > 0) setExams(data.exams);
@@ -686,39 +711,87 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const deleteRegisteredStudent = (id: string) => {
-    deleteDocument('registered_accounts', id);
-    patchServerCollection('registeredAccounts', 'delete', { id });
-    setRegisteredAccounts((prev) => prev.filter((acc) => acc.id !== id));
-    setLiveLoginAlerts((prev) => prev.filter((a) => a.studentId !== id));
-    setAuthorizedStudents((prev) => prev.filter((a) => a.id !== id && a.phone !== id));
-    setStudentActivities((prev) => prev.filter((act) => act.studentId !== id));
-    setExamSubmissions((prev) => prev.filter((sub) => sub.studentId !== id));
+  const deleteRegisteredStudent = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    const cleanTargetUuid = ensureUuid(id);
+    const targetAcc = registeredAccounts.find(
+      (acc) => acc.id === id || ensureUuid(acc.id) === cleanTargetUuid
+    );
+
+    // 1. Immediate optimistic UI update matching both raw ID and UUID
+    setRegisteredAccounts((prev) =>
+      prev.filter((acc) => acc.id !== id && ensureUuid(acc.id) !== cleanTargetUuid)
+    );
+    setLiveLoginAlerts((prev) =>
+      prev.filter((a) => a.studentId !== id && ensureUuid(a.studentId) !== cleanTargetUuid)
+    );
+    setAuthorizedStudents((prev) =>
+      prev.filter(
+        (a) =>
+          a.id !== id &&
+          a.phone !== id &&
+          (!targetAcc?.phone || a.phone !== targetAcc.phone)
+      )
+    );
+    setStudentActivities((prev) =>
+      prev.filter((act) => act.studentId !== id && ensureUuid(act.studentId) !== cleanTargetUuid)
+    );
+    setExamSubmissions((prev) =>
+      prev.filter((sub) => sub.studentId !== id && ensureUuid(sub.studentId) !== cleanTargetUuid)
+    );
     setStudentAccessMap((prev) => {
       const nextMap = { ...prev };
       delete nextMap[id];
+      delete nextMap[cleanTargetUuid];
       return nextMap;
     });
+
+    // 2. Persist deletion across both Supabase `profiles` and `/api/platform-data`
+    setIsAutoSaving(true);
+    try {
+      const [supaRes] = await Promise.all([
+        deleteStudentProfileInSupabase({
+          id,
+          email: targetAcc?.email,
+          phone: targetAcc?.phone,
+        }),
+        patchServerCollection('registeredAccounts', 'delete', {
+          id,
+          item: targetAcc ? { id: targetAcc.id, email: targetAcc.email, phone: targetAcc.phone } : { id },
+        }),
+      ]);
+      setLastAutoSavedAt(new Date().toISOString());
+      return { success: true, error: supaRes.error };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'حدث خطأ أثناء حذف الطالب' };
+    } finally {
+      setIsAutoSaving(false);
+    }
   };
 
-  const clearAllStudents = () => {
-    registeredAccounts
-      .filter((a) => a.id !== 'admin_amr_sayed' && a.role !== 'admin')
-      .forEach((a) => deleteDocument('registered_accounts', a.id));
+  const clearAllStudents = async () => {
+    setIsAutoSaving(true);
     setRegisteredAccounts(INITIAL_REGISTERED_USERS);
     setStudentActivities([]);
     setExamSubmissions([]);
     setStudentAccessMap({});
     setAuthorizedStudents([]);
     setLiveLoginAlerts([]);
-    syncServerStorePatch({
-      registeredAccounts: INITIAL_REGISTERED_USERS,
-      studentActivities: [],
-      examSubmissions: [],
-      studentAccessMap: {},
-      authorizedStudents: [],
-      liveLoginAlerts: [],
-    });
+    try {
+      await Promise.all([
+        clearAllStudentProfilesInSupabase(),
+        syncServerStorePatch({
+          registeredAccounts: INITIAL_REGISTERED_USERS,
+          studentActivities: [],
+          examSubmissions: [],
+          studentAccessMap: {},
+          authorizedStudents: [],
+          liveLoginAlerts: [],
+        }),
+      ]);
+      setLastAutoSavedAt(new Date().toISOString());
+    } finally {
+      setIsAutoSaving(false);
+    }
   };
 
   const unreadBroadcastCount = broadcastNotifications.filter((n) => !readNotifIds.includes(n.id)).length;
@@ -779,7 +852,22 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       incoming.forEach((it) => {
         const k = ensureUuid(String(it[key] || ''));
         const prev = map.get(k);
-        map.set(k, prev ? { ...prev, ...it, id: prev.id || it.id } : it);
+        if (!prev) {
+          map.set(k, it);
+          return;
+        }
+        const cleanedIncoming: Record<string, any> = {};
+        for (const [prop, val] of Object.entries(it)) {
+          if (val !== undefined) cleanedIncoming[prop] = val;
+        }
+        const merged: Record<string, any> = { ...prev, ...cleanedIncoming, id: prev.id || it.id };
+        if (Array.isArray(prev.lessons) && prev.lessons.length > 0 && (!Array.isArray(it.lessons) || it.lessons.length === 0)) {
+          merged.lessons = prev.lessons;
+        }
+        if (prev.coverImageUrl && !it.coverImageUrl) merged.coverImageUrl = prev.coverImageUrl;
+        if (prev.instructions && !it.instructions) merged.instructions = prev.instructions;
+        if (prev.scheduleText && !it.scheduleText) merged.scheduleText = prev.scheduleText;
+        map.set(k, merged as T);
       });
       return Array.from(map.values());
     };

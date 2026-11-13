@@ -87,7 +87,7 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
   const handleSaveConfig = (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
-      alert('يرجى إدخال كلٍ من رابط مشروع Supabase والمفتاح Anon Key');
+      setErrorMessage('يرجى إدخال كلٍ من رابط مشروع Supabase والمفتاح Anon Key');
       return;
     }
     saveStoredSupabaseConfig({
@@ -97,7 +97,8 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
     });
     setHasConfig(true);
     setIsConfigOpen(false);
-    alert('تم حفظ وتفعيل ربط مساحة التخزين في Supabase (Bucket: platform-files) بنجاح!');
+    setErrorMessage(null);
+    setStatusMessage('تم حفظ وتفعيل ربط مساحة التخزين في Supabase (Bucket: platform-files) بنجاح!');
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
