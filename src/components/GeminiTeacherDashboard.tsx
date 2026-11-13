@@ -26,6 +26,7 @@ import {
 import { Question, GradeLevel } from '../types';
 import { QuestionReviewEditor } from './QuestionReviewEditor';
 import { parseQuizWithAiClient, checkAiHealth, resetAiConnection, AiHealthStatus } from '../utils/aiClientService';
+import { optimizeImageForAi } from '../utils/fileOptimizer';
 
 export const GeminiTeacherDashboard: React.FC = () => {
   const { currentUser, addExam, addHomework, activeGrade } = usePlatform();
@@ -42,6 +43,9 @@ export const GeminiTeacherDashboard: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [fileMimeType, setFileMimeType] = useState<string>('');
+  const [optimizedFileDataUrl, setOptimizedFileDataUrl] = useState<string>('');
+  const [extractedFileText, setExtractedFileText] = useState<string>('');
+  const [isFileReadable, setIsFileReadable] = useState<boolean>(true);
   const [includeImagesWithQuestions, setIncludeImagesWithQuestions] = useState(true);
   const [targetGrade, setTargetGrade] = useState<GradeLevel>(activeGrade === 'all' ? 'sec3' : activeGrade);
   const [isLoading, setIsLoading] = useState(false);
@@ -56,6 +60,7 @@ export const GeminiTeacherDashboard: React.FC = () => {
   const [suggestedTitle, setSuggestedTitle] = useState('امتحان كيمياء ذكي - مستر عمرو السيد');
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -102,22 +107,33 @@ export const GeminiTeacherDashboard: React.FC = () => {
     );
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setSelectedFile(file);
-    setFileMimeType(file.type || 'image/jpeg');
     setAiError(null);
+    setAiWarning(null);
+    setIsFileReadable(true);
+    setExtractedFileText('');
+
+    const optimized = await optimizeImageForAi(file);
+    setOptimizedFileDataUrl(optimized.dataUrl);
+    setFileMimeType(optimized.mimeType || file.type || 'image/jpeg');
+    setExtractedFileText(optimized.extractedText || '');
 
     if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setFilePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      setFilePreview(optimized.dataUrl);
     } else {
       setFilePreview(null);
+    }
+
+    if (optimized.quality && !optimized.quality.isValid) {
+      setIsFileReadable(false);
+      setAiError(
+        optimized.quality.warning ||
+          'الصورة غير واضحة أو منخفضة الدقة. يُرجى رفع صورة أوضح للأسئلة.'
+      );
     }
   };
 
@@ -127,29 +143,56 @@ export const GeminiTeacherDashboard: React.FC = () => {
       return;
     }
 
+    if (selectedFile && !isFileReadable && !extractedFileText && !promptText.trim()) {
+      setAiError('الصورة المرفوعة غير واضحة ولا تحتوي على تباين كافٍ لقراءة الأسئلة. يُرجى إعادة رفع صورة أوضح.');
+      return;
+    }
+
     setIsLoading(true);
     setAiError(null);
     setAiWarning(null);
-    setAiResponseText('⏳ جاري إرسال الصورة والطلب إلى محرك Gemini 4 Hydrogen وتحليلها واستخراج الأسئلة...');
+    setAiResponseText('⏳ جاري تحليل الملف والطلب عبر نظام الاستخراج المزدوج (Gemini Vision + المحرك العلمي)...');
     setSaveSuccessNotice(null);
 
     try {
-      let fileBase64 = '';
-      if (selectedFile) {
-        fileBase64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(selectedFile);
-        });
+      let fileBase64 = optimizedFileDataUrl;
+      let mime = fileMimeType;
+      let rawExtracted = extractedFileText;
+
+      if (selectedFile && !fileBase64) {
+        const optimized = await optimizeImageForAi(selectedFile);
+        fileBase64 = optimized.dataUrl;
+        mime = optimized.mimeType;
+        rawExtracted = optimized.extractedText || '';
+        setOptimizedFileDataUrl(fileBase64);
+        setExtractedFileText(rawExtracted);
+        if (optimized.quality && !optimized.quality.isValid) {
+          setAiError(
+            optimized.quality.warning ||
+              'الصورة غير واضحة أو تالفة. يُرجى رفع صورة أوضح للأسئلة.'
+          );
+          setAiResponseText(null);
+          setIsLoading(false);
+          return;
+        }
       }
 
       const data = await parseQuizWithAiClient({
-        instructions: promptText || 'استخرج كل الأسئلة من هذه الصورة بدقة ونسقها كاختبار اختيار من متعدد وأسئلة مقالية',
+        instructions: promptText || 'استخرج كل الأسئلة من هذه الصورة حرفياً مع الحفاظ التام على الرموز والمعادلات العلمية',
         grade: targetGrade,
-        fileData: fileBase64,
-        mimeType: fileMimeType,
+        fileData: fileBase64 || undefined,
+        mimeType: mime || undefined,
+        rawText: rawExtracted || undefined,
       });
+
+      if (data.unreadableImage) {
+        setAiError(
+          data.error ||
+            'الصورة غير واضحة أو بها قص في النص. يُرجى إعادة تصوير أو رفع صورة أوضح للأسئلة.'
+        );
+        setAiResponseText(null);
+        return;
+      }
 
       if (data.warning) {
         setAiWarning(data.warning);
@@ -157,21 +200,26 @@ export const GeminiTeacherDashboard: React.FC = () => {
 
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
         setSuggestedTitle(data.quizTitle || 'اختبار كيميائي مخصص');
-        const qList: Question[] = (data.questions || []).map((q: any, idx: number) => ({
-          id: q.id || `q_gemini_${Date.now()}_${idx + 1}`,
-          text: q.text || 'سؤال تم استخراجه بواسطة Gemini',
-          image: includeImagesWithQuestions && filePreview ? filePreview : q.image || undefined,
-          type: q.type || (q.options && q.options.length > 0 ? 'mcq' : 'essay'),
-          options: q.options || ['أ', 'ب', 'ج', 'د'],
-          correctAnswerIndex: typeof q.correctAnswerIndex === 'number' ? q.correctAnswerIndex : 0,
-          explanation: q.explanation || 'إجابة نموذجية دقيقة وفق مناهج الكيمياء للثانوية العامة.',
-        }));
+        const qList: Question[] = (data.questions || []).map((q: any, idx: number) => {
+          const resolvedType = q.type || (q.options && q.options.length > 0 ? 'mcq' : 'essay');
+          return {
+            id: q.id || `q_gemini_${Date.now()}_${idx + 1}`,
+            text: q.text || 'سؤال تم استخراجه',
+            image: includeImagesWithQuestions && filePreview ? filePreview : q.image || undefined,
+            type: resolvedType,
+            points: typeof q.points === 'number' ? q.points : resolvedType === 'essay' ? 2 : 1,
+            options: resolvedType === 'essay' ? [] : q.options || ['أ', 'ب', 'ج', 'د'],
+            correctAnswerIndex: typeof q.correctAnswerIndex === 'number' ? q.correctAnswerIndex : 0,
+            modelAnswer: q.modelAnswer,
+            explanation: q.explanation || 'إجابة نموذجية دقيقة وفق مناهج الكيمياء للثانوية العامة.',
+          };
+        });
 
         setGeneratedQuestions(qList);
         const engineLabel =
           data.source === 'gemini'
             ? `محرك Google Gemini (${data.modelUsed || 'gemini-4-hydrogen'})`
-            : 'المحرك الاحتياطي المحلي (بعد تعذر استجابة Gemini)';
+            : 'محرك الاستخراج العلمي المحلي الدقيق';
         setAiResponseText(
           `✅ [رد النظام]: تم تجهيز الأسئلة بنجاح عبر ${engineLabel}!\n\n` +
           `• عدد الأسئلة المستخرجة: ${qList.length} سؤال\n` +
@@ -179,7 +227,7 @@ export const GeminiTeacherDashboard: React.FC = () => {
           `• جاهز الآن للحفظ المباشر كـ امتحان إلكتروني أو واجب في قاعدة البيانات الدائمة.`
         );
       } else {
-        setAiError(data.error || data.warning || 'تعذر استخراج الأسئلة حالياً. يرجى المحاولة مرة أخرى.');
+        setAiError(data.error || data.warning || 'تعذر استخراج الأسئلة حالياً. يرجى المحاولة مرة أخرى أو رفع صورة أوضح.');
         setAiResponseText(null);
       }
     } catch (err: any) {
@@ -601,19 +649,37 @@ export const GeminiTeacherDashboard: React.FC = () => {
                     {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (confirm('هل أنت متأكد من مسح جميع الأسئلة الحالية؟')) {
-                        setGeneratedQuestions([]);
-                        setSaveSuccessNotice(null);
-                      }
-                    }}
-                    className="p-2.5 bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-800/60 rounded-xl text-xs cursor-pointer"
-                    title="مسح الأسئلة والبدء من جديد"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {confirmClear ? (
+                    <div className="flex items-center gap-1.5 bg-red-950/70 border border-red-700/60 rounded-xl px-2.5 py-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGeneratedQuestions([]);
+                          setSaveSuccessNotice(null);
+                          setConfirmClear(false);
+                        }}
+                        className="text-xs font-bold text-red-200 hover:text-white cursor-pointer"
+                      >
+                        تأكيد المسح
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClear(false)}
+                        className="text-xs text-slate-300 hover:text-white px-1 cursor-pointer"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClear(true)}
+                      className="p-2.5 bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-800/60 rounded-xl text-xs cursor-pointer"
+                      title="مسح الأسئلة والبدء من جديد"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

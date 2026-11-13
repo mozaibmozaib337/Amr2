@@ -13,11 +13,10 @@ import {
   Phone,
   Sparkles,
 } from 'lucide-react';
-import { GradeLevel, SubscriptionType } from '../types';
-import { getSupabase } from '../services/supabaseService';
+import { GradeLevel } from '../types';
 
 export const LoginModal: React.FC = () => {
-  const { isLoginModalOpen, setIsLoginModalOpen, loginStrict, registerStrict, login, secretaries } = usePlatform();
+  const { isLoginModalOpen, setIsLoginModalOpen, loginStrict, registerStrict, secretaries } = usePlatform();
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
 
   // Login form state
@@ -78,103 +77,35 @@ export const LoginModal: React.FC = () => {
       return;
     }
 
-    // 1. Master Teacher: amr12345@gmail.com enters directly without password
-    if (isTeacherDirect) {
-      loginStrict(trimmed, '', loginCode);
-      setIsLoginModalOpen(false);
-      setIsLoading(false);
-      resetFields();
-      return;
-    }
-
-    // 2. Platform Secretaries: Enter directly without password
-    if (isSecretaryDirect) {
-      loginStrict(trimmed, '', '');
-      setIsLoginModalOpen(false);
-      setIsLoading(false);
-      resetFields();
-      return;
-    }
-
-    // 3. For all other users (all student Gmail accounts, phone, or code), password is REQUIRED!
-    if (!loginPassword.trim()) {
+    if (!isPasswordless && !loginPassword.trim()) {
       setStatusMessage({ text: 'يرجى إدخال كلمة المرور الخاصة بحسابك للدخول.', isError: true });
       return;
     }
 
-    // 4. Strict local authentication attempt
-    const localRes = loginStrict(trimmed, loginPassword.trim(), loginCode.trim());
-    if (localRes.success) {
-      setIsLoading(false);
-      setIsLoginModalOpen(false);
-      resetFields();
-      return;
-    }
-
-    // If account was found locally but password was incorrect, show the error immediately
-    if (localRes.error && localRes.error.includes('كلمة المرور غير صحيحة')) {
-      setStatusMessage({ text: localRes.error, isError: true });
-      setIsLoading(false);
-      return;
-    }
-
-    // 5. Cloud database validation (Direct Supabase query for 100% Vercel & client-side support)
     setIsLoading(true);
-
     try {
-      // Step A: Direct Supabase real-time check (works on Vercel with zero server dependency)
-      const supabase = getSupabase();
-      if (supabase) {
-        const rawLower = trimmed.toLowerCase();
-        const cleanDigits = trimmed.replace(/\D/g, '');
-        const { data: supaAccounts } = await supabase.from('registered_accounts').select('*');
-
-        if (Array.isArray(supaAccounts) && supaAccounts.length > 0) {
-          const match = supaAccounts.find((acc: any) => {
-            const e = (acc.email || '').toLowerCase();
-            const p = String(acc.phone || '').replace(/\D/g, '');
-            const c = (acc.studentCode || '').toUpperCase();
-            return (
-              e === rawLower ||
-              (cleanDigits.length >= 8 && p === cleanDigits) ||
-              c === trimmed.toUpperCase()
-            );
-          });
-
-          if (match) {
-            if (match.password === loginPassword.trim()) {
-              login(
-                match.email || `${match.phone}@amr-chem.com`,
-                match.name,
-                match.phone,
-                match.grade || 'sec3',
-                match.studentCode
-              );
-              setIsLoading(false);
-              setIsLoginModalOpen(false);
-              resetFields();
-              return;
-            } else {
-              setStatusMessage({
-                text: 'كلمة المرور غير صحيحة! يرجى التأكد من كلمة المرور بدقة.',
-                isError: true,
-              });
-              setIsLoading(false);
-              return;
-            }
-          }
-        }
+      const res = await loginStrict(
+        trimmed,
+        isPasswordless ? '' : loginPassword.trim(),
+        loginCode.trim()
+      );
+      if (res.success) {
+        setIsLoginModalOpen(false);
+        resetFields();
+      } else {
+        setStatusMessage({
+          text: res.error || 'لم يتم العثور على حساب مسجل بهذه البيانات. يرجى الضغط على "إنشاء حساب جديد" بالأسفل.',
+          isError: true,
+        });
       }
     } catch {
-      // Supabase direct query completed, proceed to API check
+      setStatusMessage({
+        text: 'تعذر الاتصال بالسحابة للتحقق من البيانات. يرجى المحاولة مرة أخرى.',
+        isError: true,
+      });
+    } finally {
+      setIsLoading(false);
     }
-
-    // Step B: Final check - if not found in local cache or Supabase, provide clear feedback
-    setIsLoading(false);
-    setStatusMessage({
-      text: localRes.error || 'لم يتم العثور على حساب مسجل بهذه البيانات. يرجى الضغط على "إنشاء حساب جديد" بالأسفل.',
-      isError: true,
-    });
   };
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
@@ -192,26 +123,39 @@ export const LoginModal: React.FC = () => {
     }
 
     setIsLoading(true);
-    const finalCode = `AMR-${Math.floor(1000 + Math.random() * 9000)}`;
-    const finalEmail = regEmail.trim() || `${regPhone.trim()}@student.amr-chem.com`;
+    try {
+      const finalCode = `AMR-${Math.floor(1000 + Math.random() * 9000)}`;
+      const finalEmail = regEmail.trim() || `${regPhone.trim()}@student.amr-chem.com`;
 
-    // 1. Instant local registration & immediate session activation
-    registerStrict({
-      name: regName.trim(),
-      email: finalEmail,
-      phone: regPhone.trim(),
-      password: regPassword.trim(),
-      studentCode: finalCode,
-      parentPhone: regParentPhone.trim(),
-      grade: regGrade,
-      governorate: regGov.trim(),
-      subscriptionType: 'course',
-    });
+      const res = await registerStrict({
+        name: regName.trim(),
+        email: finalEmail,
+        phone: regPhone.trim(),
+        password: regPassword.trim(),
+        studentCode: finalCode,
+        parentPhone: regParentPhone.trim(),
+        grade: regGrade,
+        governorate: regGov.trim(),
+        subscriptionType: 'course',
+      });
 
-    login(finalEmail, regName.trim(), regPhone.trim(), regGrade, finalCode);
-    setIsLoading(false);
-    setIsLoginModalOpen(false);
-    resetFields();
+      if (res.success) {
+        setIsLoginModalOpen(false);
+        resetFields();
+      } else {
+        setStatusMessage({
+          text: res.error || 'تعذر إنشاء الحساب في قاعدة البيانات السحابية.',
+          isError: true,
+        });
+      }
+    } catch {
+      setStatusMessage({
+        text: 'حدث خطأ غير متوقع أثناء حفظ الحساب في السحابة. يرجى المحاولة مرة أخرى.',
+        isError: true,
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const resetFields = () => {

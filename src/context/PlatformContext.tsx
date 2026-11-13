@@ -41,6 +41,11 @@ import {
   updateDocument,
   deleteDocument,
   bulkSaveDocuments,
+  findStudentProfileInSupabase,
+  fetchAllProfilesFromSupabase,
+  upsertStudentProfileInSupabase,
+  purgeLegacyLocalCaches,
+  ensureUuid,
 } from '../services/supabaseService';
 
 export const ADMIN_EMAIL = 'amr12345@gmail.com';
@@ -186,7 +191,7 @@ interface PlatformContextType {
     parentPhone?: string,
     age?: number,
     subscriptionType?: SubscriptionType
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   registerStrict: (data: {
     name: string;
     email: string;
@@ -198,7 +203,7 @@ interface PlatformContextType {
     subscriptionType?: SubscriptionType;
     grade: GradeLevel;
     governorate: string;
-  }) => { success: boolean; error?: string };
+  }) => Promise<{ success: boolean; error?: string }>;
   addRegisteredStudent: (data: {
     name: string;
     phone: string;
@@ -387,177 +392,21 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [settings]);
 
-  const [lectures, setLectures] = useState<Lecture[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_lectures');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-      return INITIAL_CURRICULUM_LECTURES;
-    } catch {
-      return INITIAL_CURRICULUM_LECTURES;
-    }
-  });
-
-  const [homeworks, setHomeworks] = useState<Homework[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_homeworks');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-      return INITIAL_CURRICULUM_HOMEWORKS;
-    } catch {
-      return INITIAL_CURRICULUM_HOMEWORKS;
-    }
-  });
-
-  const [files, setFiles] = useState<FileDocument[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_files');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [exams, setExams] = useState<Exam[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_exams');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-      return INITIAL_CURRICULUM_EXAMS;
-    } catch {
-      return INITIAL_CURRICULUM_EXAMS;
-    }
-  });
-
-  // Strict User Accounts Directory
-  const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_registered_accounts_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-      return INITIAL_REGISTERED_USERS;
-    } catch {
-      return INITIAL_REGISTERED_USERS;
-    }
-  });
-
-  // Real-Time Student Activity Stream
-  const [studentActivities, setStudentActivities] = useState<StudentActivity[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_student_activities_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-      return INITIAL_STUDENT_ACTIVITIES;
-    } catch {
-      return INITIAL_STUDENT_ACTIVITIES;
-    }
-  });
-
-  // Per-Exam Submissions and Ranking Store
-  const [examSubmissions, setExamSubmissions] = useState<ExamSubmission[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_exam_submissions_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-      return INITIAL_EXAM_SUBMISSIONS;
-    } catch {
-      return INITIAL_EXAM_SUBMISSIONS;
-    }
-  });
-
-  // Student Access & Matrix Map (studentId -> lectures, exams, homeworks)
-  const [studentAccessMap, setStudentAccessMap] = useState<Record<string, StudentAccessState>>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_student_access_map_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed === 'object' && Object.keys(parsed).length > 0) return parsed;
-      }
-      return INITIAL_STUDENT_ACCESS;
-    } catch {
-      return INITIAL_STUDENT_ACCESS;
-    }
-  });
-
-  // Payment Verification Requests (with screenshots and 20-min activation countdown)
-  const [paymentRequests, setPaymentRequests] = useState<PaymentReceiptRequest[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_payment_requests_v3');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-      return [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [honoredStudents, setHonoredStudents] = useState<HonoredStudent[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_honored_students');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [rechargeCodes, setRechargeCodes] = useState<RechargeCode[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_codes');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [transactions, setTransactions] = useState<WalletTransaction[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_transactions');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [authorizedStudents, setAuthorizedStudents] = useState<AuthorizedStudent[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_authorized_students');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [secretaries, setSecretaries] = useState<Secretary[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_secretaries');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_payment_methods');
-      return saved ? JSON.parse(saved) : DEFAULT_PAYMENT_METHODS;
-    } catch {
-      return DEFAULT_PAYMENT_METHODS;
-    }
-  });
+  const [lectures, setLectures] = useState<Lecture[]>(INITIAL_CURRICULUM_LECTURES);
+  const [homeworks, setHomeworks] = useState<Homework[]>(INITIAL_CURRICULUM_HOMEWORKS);
+  const [files, setFiles] = useState<FileDocument[]>([]);
+  const [exams, setExams] = useState<Exam[]>(INITIAL_CURRICULUM_EXAMS);
+  const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>(INITIAL_REGISTERED_USERS);
+  const [studentActivities, setStudentActivities] = useState<StudentActivity[]>(INITIAL_STUDENT_ACTIVITIES);
+  const [examSubmissions, setExamSubmissions] = useState<ExamSubmission[]>(INITIAL_EXAM_SUBMISSIONS);
+  const [studentAccessMap, setStudentAccessMap] = useState<Record<string, StudentAccessState>>(INITIAL_STUDENT_ACCESS);
+  const [paymentRequests, setPaymentRequests] = useState<PaymentReceiptRequest[]>([]);
+  const [honoredStudents, setHonoredStudents] = useState<HonoredStudent[]>([]);
+  const [rechargeCodes, setRechargeCodes] = useState<RechargeCode[]>([]);
+  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+  const [authorizedStudents, setAuthorizedStudents] = useState<AuthorizedStudent[]>([]);
+  const [secretaries, setSecretaries] = useState<Secretary[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(DEFAULT_PAYMENT_METHODS);
 
   const [activeVideo, setActiveVideo] = useState<Lecture | { title: string; videoUrl: string } | null>(null);
   const [activeDocument, setActiveDocument] = useState<{
@@ -571,19 +420,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [selectedCourseForDetails, setSelectedCourseForDetails] = useState<Lecture | null>(null);
 
-  // Broadcast Notifications State
-  const [broadcastNotifications, setBroadcastNotifications] = useState<BroadcastNotification[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_broadcast_notifs_v3');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-      return INITIAL_BROADCAST_NOTIFICATIONS;
-    } catch {
-      return INITIAL_BROADCAST_NOTIFICATIONS;
-    }
-  });
+  const [broadcastNotifications, setBroadcastNotifications] = useState<BroadcastNotification[]>(INITIAL_BROADCAST_NOTIFICATIONS);
 
   const [readNotifIds, setReadNotifIds] = useState<string[]>(() => {
     try {
@@ -595,26 +432,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   });
 
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
-
-  // Live Login Alerts (إشعارات دخول الطلاب اللحظية للمستر)
-  const [liveLoginAlerts, setLiveLoginAlerts] = useState<LiveLoginAlert[]>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_live_logins_v1');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Teacher Personal Profile State
-  const [teacherProfile, setTeacherProfile] = useState<TeacherProfile>(() => {
-    try {
-      const saved = localStorage.getItem('amr_chem_teacher_profile');
-      return saved ? { ...DEFAULT_TEACHER_PROFILE, ...JSON.parse(saved) } : DEFAULT_TEACHER_PROFILE;
-    } catch {
-      return DEFAULT_TEACHER_PROFILE;
-    }
-  });
+  const [liveLoginAlerts, setLiveLoginAlerts] = useState<LiveLoginAlert[]>([]);
+  const [teacherProfile, setTeacherProfile] = useState<TeacherProfile>(DEFAULT_TEACHER_PROFILE);
 
   const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
   const [isAutoSaving, setIsAutoSaving] = useState(false);
@@ -635,21 +454,125 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Hydrate shared settings & teacherProfile from server store on boot
+  const patchServerCollection = async (
+    collection: string,
+    action: 'upsert' | 'update' | 'delete' | 'replace',
+    payload: { item?: any; id?: string; keyField?: string }
+  ) => {
+    setIsAutoSaving(true);
+    try {
+      await fetch('/api/platform-data/patch-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection, action, ...payload }),
+      });
+      setLastAutoSavedAt(new Date().toISOString());
+    } catch {
+      // Non-blocking when offline/static
+    } finally {
+      setIsAutoSaving(false);
+    }
+  };
+
+  // Boot-time Cloud Hydration: Purge legacy localStorage DB caches and load 100% fresh state from Supabase & Server Store
   useEffect(() => {
     let mounted = true;
-    fetch('/api/platform-data')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((res) => {
-        if (!mounted || !res?.data) return;
-        if (res.data.settings && !localStorage.getItem('amr_chem_settings')) {
-          setSettings((prev) => ({ ...prev, ...res.data.settings }));
+    purgeLegacyLocalCaches();
+
+    const hydrateCloudState = async () => {
+      try {
+        const [serverRes, supaProfiles] = await Promise.all([
+          fetch('/api/platform-data')
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+          fetchAllProfilesFromSupabase().catch(() => []),
+        ]);
+
+        if (!mounted) return;
+        const data = serverRes?.data;
+
+        if (data) {
+          if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
+          if (data.teacherProfile) setTeacherProfile((prev) => ({ ...prev, ...data.teacherProfile }));
+          if (Array.isArray(data.lectures) && data.lectures.length > 0) setLectures(data.lectures);
+          if (Array.isArray(data.homeworks) && data.homeworks.length > 0) setHomeworks(data.homeworks);
+          if (Array.isArray(data.files) && data.files.length > 0) setFiles(data.files);
+          if (Array.isArray(data.exams) && data.exams.length > 0) setExams(data.exams);
+          if (Array.isArray(data.studentActivities)) setStudentActivities(data.studentActivities);
+          if (Array.isArray(data.examSubmissions)) setExamSubmissions(data.examSubmissions);
+          if (data.studentAccessMap && typeof data.studentAccessMap === 'object') {
+            setStudentAccessMap(data.studentAccessMap);
+          }
+          if (Array.isArray(data.paymentRequests)) setPaymentRequests(data.paymentRequests);
+          if (Array.isArray(data.honoredStudents)) setHonoredStudents(data.honoredStudents);
+          if (Array.isArray(data.rechargeCodes)) setRechargeCodes(data.rechargeCodes);
+          if (Array.isArray(data.transactions)) setTransactions(data.transactions);
+          if (Array.isArray(data.authorizedStudents)) setAuthorizedStudents(data.authorizedStudents);
+          if (Array.isArray(data.secretaries)) setSecretaries(data.secretaries);
+          if (Array.isArray(data.paymentMethods) && data.paymentMethods.length > 0) {
+            setPaymentMethods(data.paymentMethods);
+          }
+          if (Array.isArray(data.broadcastNotifications) && data.broadcastNotifications.length > 0) {
+            setBroadcastNotifications(data.broadcastNotifications);
+          }
+          if (Array.isArray(data.liveLoginAlerts)) setLiveLoginAlerts(data.liveLoginAlerts);
         }
-        if (res.data.teacherProfile && !localStorage.getItem('amr_chem_teacher_profile')) {
-          setTeacherProfile((prev) => ({ ...prev, ...res.data.teacherProfile }));
+
+        // Merge INITIAL_REGISTERED_USERS + server + live Supabase profiles
+        const accMap = new Map<string, RegisteredAccount>();
+        INITIAL_REGISTERED_USERS.forEach((u) => accMap.set(ensureUuid(u.id), u));
+        if (Array.isArray(data?.registeredAccounts)) {
+          data.registeredAccounts.forEach((u: RegisteredAccount) => accMap.set(ensureUuid(u.id), u));
         }
-      })
-      .catch(() => {});
+        supaProfiles.forEach((sp) => {
+          const key = ensureUuid(sp.id);
+          const prev = accMap.get(key);
+          accMap.set(
+            key,
+            prev
+              ? {
+                  ...prev,
+                  ...sp,
+                  id: prev.id || sp.id,
+                  password: sp.password || prev.password,
+                  parentPhone: sp.parentPhone || prev.parentPhone,
+                  studentCode: sp.studentCode || prev.studentCode,
+                }
+              : sp
+          );
+        });
+        const mergedAccounts = Array.from(accMap.values());
+        setRegisteredAccounts(mergedAccounts);
+
+        // Refresh active logged-in student profile against cloud so walletBalance/grade/role stay synced across phones
+        setCurrentUser((prevUser) => {
+          if (!prevUser || prevUser.role !== 'student') return prevUser;
+          const liveAcc = mergedAccounts.find(
+            (a) =>
+              ensureUuid(a.id) === ensureUuid(prevUser.id) ||
+              (a.email && prevUser.email && a.email.toLowerCase() === prevUser.email.toLowerCase()) ||
+              (a.phone && prevUser.phone && a.phone.replace(/\D/g, '') === prevUser.phone.replace(/\D/g, ''))
+          );
+          if (!liveAcc) return prevUser;
+          return {
+            ...prevUser,
+            id: liveAcc.id,
+            name: liveAcc.name || prevUser.name,
+            email: liveAcc.email || prevUser.email,
+            phone: liveAcc.phone || prevUser.phone,
+            parentPhone: liveAcc.parentPhone || prevUser.parentPhone,
+            studentCode: liveAcc.studentCode || prevUser.studentCode,
+            grade: liveAcc.grade || prevUser.grade,
+            governorate: liveAcc.governorate || prevUser.governorate,
+            walletBalance: liveAcc.walletBalance ?? prevUser.walletBalance,
+          };
+        });
+      } catch (err) {
+        console.warn('[Cloud Hydration] Notice:', err);
+      }
+    };
+
+    hydrateCloudState();
     return () => {
       mounted = false;
     };
@@ -658,18 +581,11 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const updateTeacherProfile = (updated: Partial<TeacherProfile>) => {
     setTeacherProfile((prev) => {
       const next = { ...prev, ...updated, updatedAt: new Date().toISOString() };
-      try {
-        localStorage.setItem('amr_chem_teacher_profile', JSON.stringify(next));
-      } catch {}
       saveDocument('teacher_profile', 'mr_amr', next);
       syncServerStorePatch({ teacherProfile: next });
       return next;
     });
   };
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_live_logins_v1', JSON.stringify(liveLoginAlerts));
-  }, [liveLoginAlerts]);
 
   const triggerLiveLoginAlert = (account: RegisteredAccount) => {
     const now = new Date();
@@ -691,16 +607,19 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setLiveLoginAlerts((prev) => [newAlert, ...prev.slice(0, 49)]);
     saveDocument('live_login_alerts', newAlert.id, newAlert);
+    patchServerCollection('liveLoginAlerts', 'upsert', { item: newAlert });
   };
 
   const dismissLoginAlert = (alertId: string) => {
     setLiveLoginAlerts((prev) => prev.filter((a) => a.id !== alertId));
     deleteDocument('live_login_alerts', alertId);
+    patchServerCollection('liveLoginAlerts', 'delete', { id: alertId });
   };
 
   const clearAllLoginAlerts = () => {
     liveLoginAlerts.forEach((a) => deleteDocument('live_login_alerts', a.id));
     setLiveLoginAlerts([]);
+    patchServerCollection('liveLoginAlerts', 'replace', { item: [] });
   };
 
   const addRegisteredStudent = (studentData: {
@@ -722,7 +641,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const cleanName = studentData.name.trim();
 
     const newStudent: RegisteredAccount = {
-      id: `std_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: generateUuid(),
       name: cleanName,
       phone: cleanPhone,
       parentPhone: cleanParentPhone,
@@ -740,22 +659,36 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
 
     setRegisteredAccounts((prev) => [newStudent, ...prev]);
-    saveDocument('registered_accounts', newStudent.id, newStudent);
-    setLastAutoSavedAt(new Date().toISOString());
+    upsertStudentProfileInSupabase(newStudent).then(() => {
+      setLastAutoSavedAt(new Date().toISOString());
+    });
     return newStudent;
   };
 
   const updateRegisteredStudent = (id: string, data: Partial<RegisteredAccount>) => {
+    let updatedFull: RegisteredAccount | null = null;
     setRegisteredAccounts((prev) =>
-      prev.map((acc) => (acc.id === id ? { ...acc, ...data } : acc))
+      prev.map((acc) => {
+        if (acc.id === id) {
+          updatedFull = { ...acc, ...data };
+          return updatedFull;
+        }
+        return acc;
+      })
     );
-    updateDocument('registered_accounts', id, data).then(() => {
-      setLastAutoSavedAt(new Date().toISOString());
-    });
+    if (updatedFull) {
+      upsertStudentProfileInSupabase(updatedFull).then(() => {
+        setLastAutoSavedAt(new Date().toISOString());
+      });
+    } else {
+      updateDocument('registered_accounts', id, data);
+      patchServerCollection('registeredAccounts', 'update', { id, item: data });
+    }
   };
 
   const deleteRegisteredStudent = (id: string) => {
     deleteDocument('registered_accounts', id);
+    patchServerCollection('registeredAccounts', 'delete', { id });
     setRegisteredAccounts((prev) => prev.filter((acc) => acc.id !== id));
     setLiveLoginAlerts((prev) => prev.filter((a) => a.studentId !== id));
     setAuthorizedStudents((prev) => prev.filter((a) => a.id !== id && a.phone !== id));
@@ -769,42 +702,24 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const clearAllStudents = () => {
+    registeredAccounts
+      .filter((a) => a.id !== 'admin_amr_sayed' && a.role !== 'admin')
+      .forEach((a) => deleteDocument('registered_accounts', a.id));
     setRegisteredAccounts(INITIAL_REGISTERED_USERS);
     setStudentActivities([]);
     setExamSubmissions([]);
     setStudentAccessMap({});
     setAuthorizedStudents([]);
     setLiveLoginAlerts([]);
-    localStorage.removeItem('amr_chem_registered_accounts_v2');
-    localStorage.removeItem('amr_chem_student_activities_v2');
-    localStorage.removeItem('amr_chem_exam_submissions_v2');
-    localStorage.removeItem('amr_chem_student_access_map_v2');
-    localStorage.removeItem('amr_chem_authorized_students');
-    localStorage.removeItem('amr_chem_live_logins_v1');
-    localStorage.setItem('amr_chem_registered_accounts_v2', JSON.stringify(INITIAL_REGISTERED_USERS));
+    syncServerStorePatch({
+      registeredAccounts: INITIAL_REGISTERED_USERS,
+      studentActivities: [],
+      examSubmissions: [],
+      studentAccessMap: {},
+      authorizedStudents: [],
+      liveLoginAlerts: [],
+    });
   };
-
-  // Immediate purge of any mock/unwanted students so platform starts 100% clean
-  useEffect(() => {
-    try {
-      const isPureV7 = localStorage.getItem('amr_chem_pure_purge_v7');
-      if (!isPureV7) {
-        localStorage.removeItem('amr_chem_registered_accounts_v2');
-        localStorage.removeItem('amr_chem_student_activities_v2');
-        localStorage.removeItem('amr_chem_exam_submissions_v2');
-        localStorage.removeItem('amr_chem_student_access_map_v2');
-        localStorage.removeItem('amr_chem_authorized_students');
-        localStorage.removeItem('amr_chem_live_logins_v1');
-        localStorage.setItem('amr_chem_pure_purge_v7', 'true');
-        setRegisteredAccounts(INITIAL_REGISTERED_USERS);
-        setStudentActivities([]);
-        setExamSubmissions([]);
-        setStudentAccessMap({});
-        setAuthorizedStudents([]);
-        setLiveLoginAlerts([]);
-      }
-    } catch (e) {}
-  }, []);
 
   const unreadBroadcastCount = broadcastNotifications.filter((n) => !readNotifIds.includes(n.id)).length;
 
@@ -812,6 +727,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const allIds = broadcastNotifications.map((n) => n.id);
     const updated = Array.from(new Set([...readNotifIds, ...allIds]));
     setReadNotifIds(updated);
+    try {
+      localStorage.setItem('amr_chem_read_notifs_v3', JSON.stringify(updated));
+    } catch {}
   };
 
   const sendBroadcastNotification = (
@@ -832,114 +750,70 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setBroadcastNotifications((prev) => [newNotif, ...prev]);
     saveDocument('broadcast_notifications', newNotif.id, newNotif);
+    patchServerCollection('broadcastNotifications', 'upsert', { item: newNotif });
   };
 
   const deleteBroadcastNotification = (id: string) => {
     deleteDocument('broadcast_notifications', id);
+    patchServerCollection('broadcastNotifications', 'delete', { id });
     setBroadcastNotifications((prev) => prev.filter((n) => n.id !== id));
   };
 
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('amr_chem_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('amr_chem_user');
-    }
+    try {
+      if (currentUser) {
+        localStorage.setItem('amr_chem_user', JSON.stringify(currentUser));
+      } else {
+        localStorage.removeItem('amr_chem_user');
+      }
+    } catch {}
   }, [currentUser]);
 
-  useEffect(() => {
-    localStorage.setItem('amr_chem_lectures', JSON.stringify(lectures));
-  }, [lectures]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_homeworks', JSON.stringify(homeworks));
-  }, [homeworks]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_files', JSON.stringify(files));
-  }, [files]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_exams', JSON.stringify(exams));
-  }, [exams]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_honored_students', JSON.stringify(honoredStudents));
-  }, [honoredStudents]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_codes', JSON.stringify(rechargeCodes));
-  }, [rechargeCodes]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_authorized_students', JSON.stringify(authorizedStudents));
-  }, [authorizedStudents]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_secretaries', JSON.stringify(secretaries));
-  }, [secretaries]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_payment_methods', JSON.stringify(paymentMethods));
-  }, [paymentMethods]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_registered_accounts_v2', JSON.stringify(registeredAccounts));
-  }, [registeredAccounts]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_student_activities_v2', JSON.stringify(studentActivities));
-  }, [studentActivities]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_exam_submissions_v2', JSON.stringify(examSubmissions));
-  }, [examSubmissions]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_student_access_map_v2', JSON.stringify(studentAccessMap));
-  }, [studentAccessMap]);
-
-  useEffect(() => {
-    localStorage.setItem('amr_chem_payment_requests_v2', JSON.stringify(paymentRequests));
-  }, [paymentRequests]);
-
-  // Real-Time Cloud Firestore Synchronizer across all browsers, students, and devices
-  // Guarantees instant sub-second synchronization whenever the admin or any user changes content.
+  // Real-Time Cloud Supabase Synchronizer across all browsers, students, and devices
   useEffect(() => {
     const unsubscribes: (() => void)[] = [];
+
+    const mergeByKey = <T extends Record<string, any>>(existing: T[], incoming: T[], key = 'id'): T[] => {
+      const map = new Map<string, T>();
+      existing.forEach((it) => map.set(ensureUuid(String(it[key] || '')), it));
+      incoming.forEach((it) => {
+        const k = ensureUuid(String(it[key] || ''));
+        const prev = map.get(k);
+        map.set(k, prev ? { ...prev, ...it, id: prev.id || it.id } : it);
+      });
+      return Array.from(map.values());
+    };
 
     try {
       unsubscribes.push(
         subscribeToCollection<Lecture>('lectures', (items) => {
-          if (items.length > 0) setLectures(items);
+          if (items.length > 0) setLectures((prev) => mergeByKey(prev, items));
         }, INITIAL_CURRICULUM_LECTURES)
       );
 
       unsubscribes.push(
         subscribeToCollection<Homework>('homeworks', (items) => {
-          if (items.length > 0) setHomeworks(items);
+          if (items.length > 0) setHomeworks((prev) => mergeByKey(prev, items));
         }, INITIAL_CURRICULUM_HOMEWORKS)
       );
 
       unsubscribes.push(
         subscribeToCollection<Exam>('exams', (items) => {
-          if (items.length > 0) setExams(items);
+          if (items.length > 0) setExams((prev) => mergeByKey(prev, items));
         }, INITIAL_CURRICULUM_EXAMS)
       );
 
       unsubscribes.push(
         subscribeToCollection<FileDocument>('files', (items) => {
-          setFiles(items);
+          if (items.length > 0) setFiles((prev) => mergeByKey(prev, items));
         })
       );
 
       unsubscribes.push(
         subscribeToCollection<RegisteredAccount>('registered_accounts', (items) => {
-          if (items.length > 0) setRegisteredAccounts(items);
+          if (items.length > 0) {
+            setRegisteredAccounts((prev) => mergeByKey(prev, items));
+          }
         }, INITIAL_REGISTERED_USERS)
       );
 
@@ -1025,19 +899,20 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       timestamp: now.toISOString().replace('T', ' ').substring(0, 16),
       timeAgo: `اليوم ${timeFormatted}`,
     };
-    setStudentActivities((prev) => [newAct, ...prev.slice(0, 49)]); // keep latest 50 activities
+    setStudentActivities((prev) => [newAct, ...prev.slice(0, 49)]);
     saveDocument('student_activities', newAct.id, newAct);
+    patchServerCollection('studentActivities', 'upsert', { item: newAct });
   };
 
-  // Strict Case-Sensitive Authentication (دقيق في كل حرف وكل رقم وحالة الأحرف الكبيرة والصغيرة)
-  const loginStrict = (
+  // Cloud-Authoritative Authentication (Searches live Supabase `profiles` + server store across any device)
+  const loginStrict = async (
     identifier: string,
     password: string,
     studentCode?: string,
     parentPhone?: string,
     age?: number,
     subscriptionType?: SubscriptionType
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const rawId = identifier.trim();
     const rawPass = password.trim();
     const rawCode = studentCode ? studentCode.trim() : '';
@@ -1046,13 +921,13 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return { success: false, error: 'يرجى إدخال البريد الإلكتروني أو رقم الهاتف المسجل.' };
     }
 
-    // 1. Direct Master Admin: Mr. Amr El-Sayed (amr12345@gmail.com enters directly without password)
+    // 1. Direct Master Admin: Mr. Amr El-Sayed
     const isAmrDirectAdmin =
       rawId.toLowerCase() === 'amr12345@gmail.com' ||
       rawId.toLowerCase() === ADMIN_EMAIL.toLowerCase() ||
       rawId === 'Amr.ElSayed@Chemistry.Edu';
 
-    if (isAmrDirectAdmin) {
+    if (isAmrDirectAdmin || rawId === TEACHER_PHONE_LOCAL || rawId === TEACHER_PHONE) {
       const adminProfile: UserProfile = {
         id: 'admin_amr_sayed',
         name: 'مستر عمرو السيد',
@@ -1069,25 +944,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return { success: true };
     }
 
-    const isTeacherPhone = rawId === TEACHER_PHONE_LOCAL || rawId === TEACHER_PHONE;
-    if (isTeacherPhone) {
-      const adminProfile: UserProfile = {
-        id: 'admin_amr_sayed',
-        name: 'مستر عمرو السيد',
-        email: 'Amr.ElSayed@Chemistry.Edu',
-        phone: TEACHER_PHONE_LOCAL,
-        governorate: 'المنصورة / القاهرة',
-        grade: 'sec3',
-        role: 'admin',
-        walletBalance: 9999,
-        enrolledLectureIds: [],
-      };
-      setCurrentUser(adminProfile);
-      setIsAdminPanelOpen(true);
-      return { success: true };
-    }
-
-    // Secretary Direct Bypass (No password needed for Secretary)
+    // Secretary Direct Bypass
     const cleanRawDigits = rawId.replace(/\D/g, '');
     const isSecretaryDirect =
       rawId.toLowerCase().includes('secretary') ||
@@ -1121,39 +978,52 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return { success: false, error: 'يرجى كتابة كلمة المرور الخاصة بحسابك للدخول.' };
     }
 
-    // 2. Search registeredAccounts (email case-insensitive, phone matching digits, or student code)
+    // 2. Always query LIVE Supabase `profiles` + shared server store so any second phone finds the account immediately
     const rawLower = rawId.toLowerCase();
     const cleanDigits = rawId.replace(/\D/g, '');
     const cleanUpperCode = rawId.toUpperCase();
 
-    const exactAccount = registeredAccounts.find((acc) => {
+    const cloudAccount = await findStudentProfileInSupabase(rawId);
+
+    const memoryAccount = registeredAccounts.find((acc) => {
       const accEmail = (acc.email || '').toLowerCase();
       const accPhoneDigits = (acc.phone || '').replace(/\D/g, '');
       const accCode = (acc.studentCode || '').toUpperCase();
 
-      const matchEmail = accEmail === rawLower;
-      const matchPhone = cleanDigits.length >= 8 && accPhoneDigits.length >= 8 && accPhoneDigits === cleanDigits;
-      const matchCode = accCode && accCode === cleanUpperCode;
-
-      return matchEmail || matchPhone || matchCode;
+      return (
+        accEmail === rawLower ||
+        (cleanDigits.length >= 8 && accPhoneDigits.length >= 8 && accPhoneDigits === cleanDigits) ||
+        (accCode && accCode === cleanUpperCode)
+      );
     });
+
+    const exactAccount: RegisteredAccount | null = cloudAccount
+      ? {
+          ...(memoryAccount || {}),
+          ...cloudAccount,
+          id: cloudAccount.id || memoryAccount?.id || generateUuid(),
+          password: cloudAccount.password || memoryAccount?.password || '',
+          parentPhone: cloudAccount.parentPhone || memoryAccount?.parentPhone || '',
+          studentCode: cloudAccount.studentCode || memoryAccount?.studentCode || '',
+        }
+      : memoryAccount || null;
 
     if (!exactAccount) {
       return {
         success: false,
-        error: 'بيانات الدخول غير صحيحة! لم يتم العثور على حساب بهذا البريد أو الهاتف. يرجى التأكد من البيانات أو إنشاء حساب جديد.',
+        error: 'لم يتم العثور على حساب مسجل بهذا البريد أو الهاتف في السحابة. يرجى التأكد من البيانات أو إنشاء حساب جديد.',
       };
     }
 
-    // 3. Strict Password Verification
-    if (exactAccount.password !== rawPass) {
+    // 3. Strict Password Verification against cloud/account password
+    if (exactAccount.password && exactAccount.password !== rawPass) {
       return {
         success: false,
         error: 'كلمة المرور غير صحيحة! يرجى كتابة كلمة المرور الخاصة بحسابك بدقة.',
       };
     }
 
-    // 4. Student Code Verification (if provided)
+    // 4. Student Code Verification (if explicitly provided)
     if (rawCode && exactAccount.studentCode && exactAccount.studentCode.toUpperCase() !== rawCode.toUpperCase()) {
       return {
         success: false,
@@ -1161,7 +1031,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       };
     }
 
-    // 5. Successful Login & update live attributes
+    // 5. Update lastLoginAt & merge account cleanly into cloud + state
     const updatedAccount: RegisteredAccount = {
       ...exactAccount,
       parentPhone: parentPhone?.trim() || exactAccount.parentPhone || '',
@@ -1171,10 +1041,14 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isOnline: true,
     };
 
-    setRegisteredAccounts((prev) =>
-      prev.map((acc) => (acc.id === exactAccount.id ? updatedAccount : acc))
-    );
-    saveDocument('registered_accounts', updatedAccount.id, updatedAccount);
+    setRegisteredAccounts((prev) => {
+      const idx = prev.findIndex((a) => ensureUuid(a.id) === ensureUuid(updatedAccount.id));
+      if (idx >= 0) {
+        return prev.map((a, i) => (i === idx ? updatedAccount : a));
+      }
+      return [updatedAccount, ...prev];
+    });
+    upsertStudentProfileInSupabase(updatedAccount);
 
     const studentProfile: UserProfile = {
       id: updatedAccount.id,
@@ -1195,16 +1069,14 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setCurrentUser(studentProfile);
 
-    // Trigger Live Login Alert for Mr. Amr
     triggerLiveLoginAlert(updatedAccount);
 
-    // Log Activity
     recordActivity({
-      studentId: exactAccount.id,
-      studentName: exactAccount.name,
-      studentPhone: exactAccount.phone,
-      studentCode: exactAccount.studentCode,
-      grade: exactAccount.grade,
+      studentId: updatedAccount.id,
+      studentName: updatedAccount.name,
+      studentPhone: updatedAccount.phone,
+      studentCode: updatedAccount.studentCode,
+      grade: updatedAccount.grade,
       type: 'login',
       itemId: 'auth_login',
       itemTitle: 'تسجيل الدخول إلى المنصة',
@@ -1214,8 +1086,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return { success: true };
   };
 
-  // Register with exact casing and store in registered accounts
-  const registerStrict = (data: {
+  // Cloud Registration: Saves directly to Supabase `profiles` & server store and awaits confirmation
+  const registerStrict = async (data: {
     name: string;
     email: string;
     phone: string;
@@ -1226,57 +1098,116 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     subscriptionType?: SubscriptionType;
     grade: GradeLevel;
     governorate: string;
-  }): { success: boolean; error?: string } => {
-    // Check if duplicate
-    const exists = registeredAccounts.find(
-      (a) => a.email === data.email || a.phone === data.phone
-    );
-    if (exists) {
+  }): Promise<{ success: boolean; error?: string }> => {
+    const cleanPhone = data.phone.trim();
+    const cleanDigits = cleanPhone.replace(/\D/g, '');
+    const cleanEmail = data.email.trim();
+    const cleanEmailLower = cleanEmail.toLowerCase();
+
+    // 1. Check duplicate both locally and live in Supabase `profiles`
+    const existingLocal = registeredAccounts.find((a) => {
+      const aDigits = (a.phone || '').replace(/\D/g, '');
+      const phoneDup = a.phone === cleanPhone || (cleanDigits.length >= 8 && aDigits === cleanDigits);
+      const emailDup = Boolean(cleanEmailLower && (a.email || '').toLowerCase() === cleanEmailLower);
+      return phoneDup || emailDup;
+    });
+    if (existingLocal) {
       return {
         success: false,
         error: 'هذا البريد الإلكتروني أو رقم الهاتف مسجل بالفعل مسبقاً. يرجى تسجيل الدخول مباشرة.',
       };
     }
 
+    const [cloudByPhone, cloudByEmail] = await Promise.all([
+      findStudentProfileInSupabase(cleanPhone),
+      cleanEmail ? findStudentProfileInSupabase(cleanEmail) : Promise.resolve(null),
+    ]);
+    if (cloudByPhone || cloudByEmail) {
+      return {
+        success: false,
+        error: 'هذا البريد الإلكتروني أو رقم الهاتف مسجل بالفعل في قاعدة البيانات. يرجى تسجيل الدخول مباشرة.',
+      };
+    }
+
     const newAcc: RegisteredAccount = {
-      id: 'std_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      id: generateUuid(),
       name: data.name.trim(),
-      email: data.email.trim(), // Exact casing preserved
-      phone: data.phone.trim(),
-      password: data.password.trim(), // Exact casing preserved
-      studentCode: data.studentCode.trim(), // Exact casing preserved
+      email: cleanEmail,
+      phone: cleanPhone,
+      password: data.password.trim(),
+      studentCode: data.studentCode.trim().toUpperCase(),
       parentPhone: data.parentPhone.trim(),
-      age: data.age,
+      age: data.age || 18,
       subscriptionType: data.subscriptionType || 'course',
       lastLoginAt: new Date().toISOString(),
       isOnline: true,
       grade: data.grade,
-      governorate: data.governorate.trim(),
+      governorate: data.governorate.trim() || 'القاهرة',
       role: 'student',
       walletBalance: 0,
       registeredAt: new Date().toISOString().split('T')[0],
     };
 
+    // 2. Persist immediately to Supabase `profiles` + `/api/platform-data` before confirming
+    const saveResult = await upsertStudentProfileInSupabase(newAcc);
+    if (!saveResult.success) {
+      return {
+        success: false,
+        error: saveResult.error || 'تعذر حفظ بيانات الطالب في قاعدة البيانات السحابية. يرجى التحقق من الاتصال والمحاولة مرة أخرى.',
+      };
+    }
+
     setRegisteredAccounts((prev) => [newAcc, ...prev]);
-    saveDocument('registered_accounts', newAcc.id, newAcc);
 
-    // Trigger Live Login Alert for Mr. Amr
-    triggerLiveLoginAlert(newAcc);
-
-    // Initialize access records
+    const initialAccess: StudentAccessState = {
+      lectures: {},
+      exams: {},
+      homeworks: {},
+    };
     setStudentAccessMap((prev) => ({
       ...prev,
-      [newAcc.id]: {
-        lectures: {},
-        exams: {},
-        homeworks: {},
-      },
+      [newAcc.id]: initialAccess,
     }));
+    patchServerCollection('studentAccessMap', 'upsert', { id: newAcc.id, item: initialAccess });
+
+    // 3. Activate student session immediately with exact cloud ID & attributes
+    const studentProfile: UserProfile = {
+      id: newAcc.id,
+      name: newAcc.name,
+      email: newAcc.email,
+      phone: newAcc.phone,
+      studentCode: newAcc.studentCode,
+      parentPhone: newAcc.parentPhone,
+      age: newAcc.age,
+      subscriptionType: newAcc.subscriptionType,
+      lastLoginAt: newAcc.lastLoginAt,
+      isOnline: true,
+      governorate: newAcc.governorate,
+      grade: newAcc.grade,
+      role: newAcc.role,
+      walletBalance: newAcc.walletBalance,
+      enrolledLectureIds: [],
+    };
+    setCurrentUser(studentProfile);
+
+    triggerLiveLoginAlert(newAcc);
+
+    recordActivity({
+      studentId: newAcc.id,
+      studentName: newAcc.name,
+      studentPhone: newAcc.phone,
+      studentCode: newAcc.studentCode,
+      grade: newAcc.grade,
+      type: 'login',
+      itemId: 'auth_register',
+      itemTitle: 'إنشاء حساب طالب جديد وحفظه سحابياً',
+      status: 'completed',
+    });
 
     return { success: true };
   };
 
-  // Backwards-compatible login
+  // Backwards-compatible synchronous login helper
   const login = (
     emailOrPhone: string,
     name?: string,
@@ -1284,24 +1215,38 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     grade: GradeLevel = 'sec3',
     code?: string
   ): boolean => {
-    // Try strict first
-    const res = loginStrict(emailOrPhone, '123456', code);
-    if (res.success) return true;
-
-    // Fallback for immediate guest/demo access
     const cleanPhone = (phone || emailOrPhone).trim();
-    const studentProfile: UserProfile = {
-      id: 'std_' + Math.random().toString(36).substring(2, 9),
-      name: name?.trim() || 'طالب جديد',
-      email: emailOrPhone.trim(),
-      phone: cleanPhone,
-      studentCode: code?.trim(),
-      governorate: 'القاهرة',
-      grade,
-      role: 'student',
-      walletBalance: 0,
-      enrolledLectureIds: [],
-    };
+    const matched = registeredAccounts.find(
+      (a) =>
+        (a.email && a.email.toLowerCase() === emailOrPhone.trim().toLowerCase()) ||
+        (a.phone && a.phone.trim() === cleanPhone)
+    );
+    const studentProfile: UserProfile = matched
+      ? {
+          id: matched.id,
+          name: matched.name,
+          email: matched.email,
+          phone: matched.phone,
+          studentCode: matched.studentCode,
+          parentPhone: matched.parentPhone,
+          governorate: matched.governorate,
+          grade: matched.grade,
+          role: matched.role,
+          walletBalance: matched.walletBalance,
+          enrolledLectureIds: [],
+        }
+      : {
+          id: generateUuid(),
+          name: name?.trim() || 'طالب جديد',
+          email: emailOrPhone.trim(),
+          phone: cleanPhone,
+          studentCode: code?.trim(),
+          governorate: 'القاهرة',
+          grade,
+          role: 'student',
+          walletBalance: 0,
+          enrolledLectureIds: [],
+        };
     setCurrentUser(studentProfile);
     return true;
   };
@@ -1311,6 +1256,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!currentUser) return;
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
 
+    const entryState = { lectures: { [lectureId]: { entered: true, date: nowStr } } };
     setStudentAccessMap((prev) => {
       const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
       return {
@@ -1324,6 +1270,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         },
       };
     });
+    patchServerCollection('studentAccessMap', 'upsert', { id: currentUser.id, item: entryState });
 
     recordActivity({
       studentId: currentUser.id,
@@ -1338,7 +1285,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
-  // Live Tracking: Mark lecture completed by student & update Supabase
+  // Live Tracking: Mark lecture completed by student & update Supabase + Server Store
   const markLectureCompleted = async (
     lectureId: string,
     lectureTitle: string
@@ -1350,27 +1297,30 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const dateFormatted = `${now.toLocaleDateString('ar-EG')} - ${timeFormatted}`;
     const nowIso = now.toISOString();
 
-    // 1. Update state
     setStudentAccessMap((prev) => {
       const current = prev[studentId] || { lectures: {}, exams: {}, homeworks: {} };
       const currentLec = current.lectures[lectureId] || { entered: true };
+      const updatedLec = {
+        ...currentLec,
+        completed: true,
+        completedAt: dateFormatted,
+      };
+      patchServerCollection('studentAccessMap', 'upsert', {
+        id: studentId,
+        item: { lectures: { [lectureId]: updatedLec } },
+      });
       return {
         ...prev,
         [studentId]: {
           ...current,
           lectures: {
             ...current.lectures,
-            [lectureId]: {
-              ...currentLec,
-              completed: true,
-              completedAt: dateFormatted,
-            },
+            [lectureId]: updatedLec,
           },
         },
       };
     });
 
-    // 2. Persist to Supabase in student_progress table
     try {
       await saveDocument('student_progress', `${studentId}_${lectureId}`, {
         studentId,
@@ -1388,15 +1338,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       console.warn('[Supabase] Failed saving student_progress:', e);
     }
 
-    // 3. Save to localStorage for instant persistence
-    try {
-      const storageKey = `amr_chem_completed_${studentId}`;
-      const existing = JSON.parse(localStorage.getItem(storageKey) || '{}');
-      existing[lectureId] = { completed: true, date: dateFormatted };
-      localStorage.setItem(storageKey, JSON.stringify(existing));
-    } catch {}
-
-    // 4. Record Activity
     if (currentUser) {
       recordActivity({
         studentId: currentUser.id,
@@ -1416,16 +1357,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const isLectureCompleted = (lectureId: string): boolean => {
     const studentId = currentUser ? currentUser.id : 'guest_student';
-    if (studentAccessMap[studentId]?.lectures[lectureId]?.completed) {
-      return true;
-    }
-    try {
-      const storageKey = `amr_chem_completed_${studentId}`;
-      const existing = JSON.parse(localStorage.getItem(storageKey) || '{}');
-      return !!existing[lectureId]?.completed;
-    } catch {
-      return false;
-    }
+    return !!studentAccessMap[studentId]?.lectures[lectureId]?.completed;
   };
 
   // Live Tracking: Record assessment submission (Exam / Sheet / Homework) with smart MCQ + Essay grading
@@ -1486,28 +1418,39 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return [submission, ...filtered];
     });
     saveDocument('exam_submissions', submission.id, submission);
+    patchServerCollection('examSubmissions', 'upsert', { item: submission });
 
     setStudentAccessMap((prev) => {
       const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
       if (assessmentType === 'sheet' || assessmentType === 'homework') {
+        const hwUpdate = { [examId]: { solved: true, score, maxScore, percentage, date: nowStr } };
+        patchServerCollection('studentAccessMap', 'upsert', {
+          id: currentUser.id,
+          item: { homeworks: hwUpdate },
+        });
         return {
           ...prev,
           [currentUser.id]: {
             ...current,
             homeworks: {
               ...current.homeworks,
-              [examId]: { solved: true, score, maxScore, percentage, date: nowStr },
+              ...hwUpdate,
             },
           },
         };
       }
+      const exUpdate = { [examId]: { taken: true, score, maxScore, percentage, date: nowStr } };
+      patchServerCollection('studentAccessMap', 'upsert', {
+        id: currentUser.id,
+        item: { exams: exUpdate },
+      });
       return {
         ...prev,
         [currentUser.id]: {
           ...current,
           exams: {
             ...current.exams,
-            [examId]: { taken: true, score, maxScore, percentage, date: nowStr },
+            ...exUpdate,
           },
         },
       };
@@ -1565,42 +1508,57 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (updatedSub) {
       const target: ExamSubmission = updatedSub;
       saveDocument('exam_submissions', target.id, target);
+      patchServerCollection('examSubmissions', 'upsert', { item: target });
 
       setStudentAccessMap((prev) => {
         const studentId = target.studentId;
         const examId = target.examId;
         const current = prev[studentId] || { lectures: {}, exams: {}, homeworks: {} };
         if (target.assessmentType === 'sheet' || target.assessmentType === 'homework') {
+          const hwUpdate = {
+            [examId]: {
+              solved: true,
+              score: target.score,
+              maxScore: target.maxScore,
+              percentage: target.percentage,
+              date: nowStr,
+            },
+          };
+          patchServerCollection('studentAccessMap', 'upsert', {
+            id: studentId,
+            item: { homeworks: hwUpdate },
+          });
           return {
             ...prev,
             [studentId]: {
               ...current,
               homeworks: {
                 ...current.homeworks,
-                [examId]: {
-                  solved: true,
-                  score: target.score,
-                  maxScore: target.maxScore,
-                  percentage: target.percentage,
-                  date: nowStr,
-                },
+                ...hwUpdate,
               },
             },
           };
         }
+        const exUpdate = {
+          [examId]: {
+            taken: true,
+            score: target.score,
+            maxScore: target.maxScore,
+            percentage: target.percentage,
+            date: nowStr,
+          },
+        };
+        patchServerCollection('studentAccessMap', 'upsert', {
+          id: studentId,
+          item: { exams: exUpdate },
+        });
         return {
           ...prev,
           [studentId]: {
             ...current,
             exams: {
               ...current.exams,
-              [examId]: {
-                taken: true,
-                score: target.score,
-                maxScore: target.maxScore,
-                percentage: target.percentage,
-                date: nowStr,
-              },
+              ...exUpdate,
             },
           },
         };
@@ -1622,6 +1580,15 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         ? Math.round((scoreInfo.score / scoreInfo.maxScore) * 100)
         : undefined;
 
+    const hwUpdate = {
+      [homeworkId]: {
+        solved: isSolved,
+        score: scoreInfo?.score,
+        maxScore: scoreInfo?.maxScore,
+        percentage,
+        date: nowStr,
+      },
+    };
     setStudentAccessMap((prev) => {
       const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
       return {
@@ -1630,16 +1597,14 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ...current,
           homeworks: {
             ...current.homeworks,
-            [homeworkId]: {
-              solved: isSolved,
-              score: scoreInfo?.score,
-              maxScore: scoreInfo?.maxScore,
-              percentage,
-              date: nowStr,
-            },
+            ...hwUpdate,
           },
         },
       };
+    });
+    patchServerCollection('studentAccessMap', 'upsert', {
+      id: currentUser.id,
+      item: { homeworks: hwUpdate },
     });
 
     if (isSolved) {
@@ -1829,7 +1794,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setLectures((prev) => [newLec, ...prev]);
     setIsAutoSaving(true);
-    const res = await saveDocument('lectures', newLec.id, newLec);
+    const [res] = await Promise.all([
+      saveDocument('lectures', newLec.id, newLec),
+      patchServerCollection('lectures', 'upsert', { item: newLec }),
+    ]);
     setIsAutoSaving(false);
     setLastAutoSavedAt(new Date().toISOString());
     return res;
@@ -1848,6 +1816,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('lectures', id, mergedItem) : updateDocument('lectures', id, updated);
+    patchServerCollection('lectures', 'update', { id, item: mergedItem || updated });
     Promise.resolve(op).finally(() => {
       setIsAutoSaving(false);
       setLastAutoSavedAt(new Date().toISOString());
@@ -1856,6 +1825,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const deleteLecture = (id: string) => {
     deleteDocument('lectures', id);
+    patchServerCollection('lectures', 'delete', { id });
     setLectures((prev) => prev.filter((item) => item.id !== id));
     if (activeVideo && 'id' in activeVideo && activeVideo.id === id) {
       setActiveVideo(null);
@@ -1872,6 +1842,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setHomeworks((prev) => [newHw, ...prev]);
     setIsAutoSaving(true);
+    patchServerCollection('homeworks', 'upsert', { item: newHw });
     saveDocument('homeworks', newHw.id, newHw).finally(() => {
       setIsAutoSaving(false);
       setLastAutoSavedAt(new Date().toISOString());
@@ -1891,6 +1862,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('homeworks', id, mergedItem) : updateDocument('homeworks', id, updated);
+    patchServerCollection('homeworks', 'update', { id, item: mergedItem || updated });
     Promise.resolve(op).finally(() => {
       setIsAutoSaving(false);
       setLastAutoSavedAt(new Date().toISOString());
@@ -1899,6 +1871,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const deleteHomework = (id: string) => {
     deleteDocument('homeworks', id);
+    patchServerCollection('homeworks', 'delete', { id });
     setHomeworks((prev) => prev.filter((item) => item.id !== id));
     setLastAutoSavedAt(new Date().toISOString());
   };
@@ -1912,7 +1885,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setFiles((prev) => [newFile, ...prev]);
     setIsAutoSaving(true);
-    const res = await saveDocument('files', newFile.id, newFile);
+    const [res] = await Promise.all([
+      saveDocument('files', newFile.id, newFile),
+      patchServerCollection('files', 'upsert', { item: newFile }),
+    ]);
     setIsAutoSaving(false);
     setLastAutoSavedAt(new Date().toISOString());
     return res;
@@ -1920,6 +1896,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const deleteFile = (id: string) => {
     deleteDocument('files', id);
+    patchServerCollection('files', 'delete', { id });
     setFiles((prev) => prev.filter((item) => item.id !== id));
     if (activeDocument && activeDocument.fileUrl === files.find((f) => f.id === id)?.fileUrl) {
       setActiveDocument(null);
@@ -1940,6 +1917,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('files', id, mergedItem) : updateDocument('files', id, updated);
+    patchServerCollection('files', 'update', { id, item: mergedItem || updated });
     Promise.resolve(op).finally(() => {
       setIsAutoSaving(false);
       setLastAutoSavedAt(new Date().toISOString());
@@ -1955,6 +1933,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setExams((prev) => [newExam, ...prev]);
     setIsAutoSaving(true);
+    patchServerCollection('exams', 'upsert', { item: newExam });
     saveDocument('exams', newExam.id, newExam).finally(() => {
       setIsAutoSaving(false);
       setLastAutoSavedAt(new Date().toISOString());
@@ -1974,6 +1953,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('exams', id, mergedItem) : updateDocument('exams', id, updated);
+    patchServerCollection('exams', 'update', { id, item: mergedItem || updated });
     Promise.resolve(op).finally(() => {
       setIsAutoSaving(false);
       setLastAutoSavedAt(new Date().toISOString());
@@ -1982,6 +1962,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const deleteExam = (id: string) => {
     deleteDocument('exams', id);
+    patchServerCollection('exams', 'delete', { id });
     setExams((prev) => prev.filter((item) => item.id !== id));
     setLastAutoSavedAt(new Date().toISOString());
   };
@@ -1995,10 +1976,12 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setHonoredStudents((prev) => [newStudent, ...prev]);
     saveDocument('honored_students', newStudent.id, newStudent);
+    patchServerCollection('honoredStudents', 'upsert', { item: newStudent });
   };
 
   const deleteHonoredStudent = (id: string) => {
     deleteDocument('honored_students', id);
+    patchServerCollection('honoredStudents', 'delete', { id });
     setHonoredStudents((prev) => prev.filter((s) => s.id !== id));
   };
 
@@ -2015,10 +1998,12 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setSecretaries((prev) => [newSec, ...prev]);
     saveDocument('secretaries', newSec.id, newSec);
+    patchServerCollection('secretaries', 'upsert', { item: newSec });
   };
 
   const deleteSecretary = (id: string) => {
     deleteDocument('secretaries', id);
+    patchServerCollection('secretaries', 'delete', { id });
     setSecretaries((prev) => prev.filter((s) => s.id !== id));
   };
 
@@ -2030,19 +2015,22 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setPaymentMethods((prev) => [...prev, newMethod]);
     saveDocument('payment_methods', newMethod.id, newMethod);
+    patchServerCollection('paymentMethods', 'upsert', { item: newMethod });
   };
 
   const updatePaymentMethod = (id: string, updated: Partial<PaymentMethod>) => {
     setPaymentMethods((prev) => prev.map((m) => (m.id === id ? { ...m, ...updated } : m)));
     updateDocument('payment_methods', id, updated);
+    patchServerCollection('paymentMethods', 'update', { id, item: updated });
   };
 
   const deletePaymentMethod = (id: string) => {
     deleteDocument('payment_methods', id);
+    patchServerCollection('paymentMethods', 'delete', { id });
     setPaymentMethods((prev) => prev.filter((m) => m.id !== id));
   };
 
-  // Settings (Auto-saved immediately to DOM, localStorage, Supabase cache, and server store)
+  // Settings (Auto-saved immediately to DOM, Supabase cache, and server store)
   const updateSettings = (newSettings: Partial<PlatformSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...newSettings };
@@ -2076,6 +2064,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setAuthorizedStudents((prev) => [newAuth, ...prev]);
     saveDocument('authorized_students', newAuth.id, newAuth);
+    patchServerCollection('authorizedStudents', 'upsert', { item: newAuth });
 
     if (currentUser && currentUser.phone === cleanPhone) {
       setCurrentUser({
@@ -2088,6 +2077,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const removeAuthorizedStudent = (id: string) => {
     deleteDocument('authorized_students', id);
+    patchServerCollection('authorizedStudents', 'delete', { id });
     const target = authorizedStudents.find((a) => a.id === id);
     setAuthorizedStudents((prev) => prev.filter((item) => item.id !== id));
 
@@ -2188,6 +2178,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setPaymentRequests((prev) => [newReq, ...prev]);
     saveDocument('payment_requests', newReq.id, newReq);
+    patchServerCollection('paymentRequests', 'upsert', { item: newReq });
 
     return {
       success: true,
@@ -2205,6 +2196,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       )
     );
     updateDocument('payment_requests', id, { status: 'approved', reviewedAt: revTime });
+    patchServerCollection('paymentRequests', 'update', { id, item: { status: 'approved', reviewedAt: revTime } });
   };
 
   const rejectPaymentRequest = (id: string, reason?: string) => {
@@ -2218,6 +2210,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       )
     );
     updateDocument('payment_requests', id, { status: 'rejected', notes: reasonText, reviewedAt: revTime });
+    patchServerCollection('paymentRequests', 'update', { id, item: { status: 'rejected', notes: reasonText, reviewedAt: revTime } });
   };
 
   const addBatchAuthorizedStudents = (
@@ -2233,7 +2226,11 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       dateAdded: nowStr,
     }));
 
-    setAuthorizedStudents((prev) => [...newItems, ...prev]);
+    setAuthorizedStudents((prev) => {
+      const merged = [...newItems, ...prev];
+      syncServerStorePatch({ authorizedStudents: merged });
+      return merged;
+    });
     bulkSaveDocuments('authorized_students', newItems);
     setLastAutoSavedAt(new Date().toISOString());
     return newItems.length;
@@ -2265,6 +2262,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       walletBalance: updatedBalance,
       enrolledLectureIds: updatedEnrolled,
     });
+    updateRegisteredStudent(currentUser.id, { walletBalance: updatedBalance });
 
     const tx: WalletTransaction = {
       id: 'tx_' + Date.now(),
@@ -2274,6 +2272,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       description: `شراء كورس: ${lecture.title}`,
     };
     setTransactions((prev) => [tx, ...prev]);
+    patchServerCollection('transactions', 'upsert', { item: tx });
 
     return { success: true, message: 'تم شراء الكورس بنجاح! يمكنك الآن مشاهدته في أي وقت.' };
   };
@@ -2340,6 +2339,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setRechargeCodes((prev) => [newCode, ...prev]);
     saveDocument('recharge_codes', cleanCode, newCode);
+    patchServerCollection('rechargeCodes', 'upsert', { item: newCode, keyField: 'code' });
     return true;
   };
 
@@ -2374,7 +2374,11 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
       }
 
-      setRechargeCodes((prev) => [...newCodes, ...prev]);
+      setRechargeCodes((prev) => {
+        const merged = [...newCodes, ...prev];
+        syncServerStorePatch({ rechargeCodes: merged });
+        return merged;
+      });
       bulkSaveDocuments('recharge_codes', newCodes.map((c) => ({ ...c, id: c.code })));
       return { success: true, count: newCodes.length, codes: newCodes };
     } catch (err) {
@@ -2385,6 +2389,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const deleteRechargeCode = (code: string) => {
     deleteDocument('recharge_codes', code);
+    patchServerCollection('rechargeCodes', 'delete', { id: code, keyField: 'code' });
     setRechargeCodes((prev) => prev.filter((c) => c.code !== code));
   };
 
@@ -2428,25 +2433,17 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const nextUsedCount = currentUsed + 1;
     const isNowFullyUsed = nextUsedCount >= maxUses;
 
-    setRechargeCodes((prev) =>
-      prev.map((c) =>
-        c.code.toUpperCase() === cleanCode
-          ? {
-              ...c,
-              usedCount: nextUsedCount,
-              isUsed: isNowFullyUsed,
-              usedBy: currentUser?.phone || currentUser?.email || 'طالب',
-            }
-          : c
-      )
-    );
-    updateDocument('recharge_codes', cleanCode, {
+    const codeUpdate = {
       usedCount: nextUsedCount,
       isUsed: isNowFullyUsed,
       usedBy: currentUser?.phone || currentUser?.email || 'طالب',
-    });
+    };
+    setRechargeCodes((prev) =>
+      prev.map((c) => (c.code.toUpperCase() === cleanCode ? { ...c, ...codeUpdate } : c))
+    );
+    updateDocument('recharge_codes', cleanCode, codeUpdate);
+    patchServerCollection('rechargeCodes', 'update', { id: cleanCode, keyField: 'code', item: codeUpdate });
 
-    // If code has an attached course, immediately unlock it for current student
     let courseUnlockedNotice = '';
     if (found.courseId && currentUser) {
       const updatedEnrolled = Array.from(new Set([...currentUser.enrolledLectureIds, found.courseId]));
@@ -2457,7 +2454,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       courseUnlockedNotice = found.courseTitle ? ` لكورس: (${found.courseTitle})` : ' للكورس المحدد';
     }
 
-    // If code has wallet value, credit student's wallet
     if (currentUser && found.value > 0) {
       const updatedBalance = currentUser.walletBalance + found.value;
       setCurrentUser({
@@ -2467,6 +2463,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ? { enrolledLectureIds: Array.from(new Set([...currentUser.enrolledLectureIds, found.courseId])) }
           : {}),
       });
+      updateRegisteredStudent(currentUser.id, { walletBalance: updatedBalance });
     }
 
     const tx: WalletTransaction = {
@@ -2478,6 +2475,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       code: cleanCode,
     };
     setTransactions((prev) => [tx, ...prev]);
+    patchServerCollection('transactions', 'upsert', { item: tx });
 
     return {
       success: true,

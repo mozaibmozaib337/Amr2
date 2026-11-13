@@ -62,9 +62,9 @@ import { optimizeImageForAi } from '../utils/fileOptimizer';
 import { uploadFileWithRealProgress, probeVideoDuration } from '../utils/realUploader';
 import { GeminiTeacherDashboard } from './GeminiTeacherDashboard';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
-import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient, resetAiConnection } from '../utils/aiClientService';
-import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials } from '../services/supabaseService';
-import { Database, Link2 } from 'lucide-react';
+import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient, resetAiConnection, parseScientificQuestionsLocally } from '../utils/aiClientService';
+import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials, testSupabaseSchemaHealth } from '../services/supabaseService';
+import { Database, Link2, Copy } from 'lucide-react';
 import { parseYouTubeUrl, parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
 import { TopRankingsDirectorySection } from './TopRankingsDirectorySection';
 import { StudentDirectorySection } from './StudentDirectorySection';
@@ -161,6 +161,7 @@ export const AdminPanelModal: React.FC = () => {
     | 'exams'
     | 'gemini_ai'
     | 'students'
+    | 'student_data_section'
     | 'receipts'
     | 'broadcast'
     | 'honor'
@@ -293,6 +294,7 @@ export const AdminPanelModal: React.FC = () => {
   const [hwAttachedFile, setHwAttachedFile] = useState<File | null>(null);
   const [hwAttachedDataUrl, setHwAttachedDataUrl] = useState('');
   const [hwAttachedMime, setHwAttachedMime] = useState('');
+  const [hwExtractedText, setHwExtractedText] = useState('');
 
   const [hwChatMessages, setHwChatMessages] = useState<
     { id: string; sender: 'teacher' | 'ai'; text: string; time: string }[]
@@ -334,6 +336,7 @@ export const AdminPanelModal: React.FC = () => {
   const [examAttachedFile, setExamAttachedFile] = useState<File | null>(null);
   const [examAttachedDataUrl, setExamAttachedDataUrl] = useState('');
   const [examAttachedMime, setExamAttachedMime] = useState('');
+  const [examExtractedText, setExamExtractedText] = useState('');
 
   const [examChatMessages, setExamChatMessages] = useState<
     { id: string; sender: 'teacher' | 'ai'; text: string; time: string }[]
@@ -392,6 +395,8 @@ export const AdminPanelModal: React.FC = () => {
   const [sbUrlInput, setSbUrlInput] = useState(initialSupabaseCreds.url);
   const [sbKeyInput, setSbKeyInput] = useState(initialSupabaseCreds.key);
   const [sbSavingStatus, setSbSavingStatus] = useState<string | null>(null);
+  const [sbHealthReport, setSbHealthReport] = useState<Awaited<ReturnType<typeof testSupabaseSchemaHealth>> | null>(null);
+  const [isCheckingSbHealth, setIsCheckingSbHealth] = useState(false);
 
   // AI Emergency Reset State & Auto-Save Sync Refs (Strictly before any early return)
   const [isResettingAi, setIsResettingAi] = useState(false);
@@ -886,10 +891,10 @@ export const AdminPanelModal: React.FC = () => {
     }
   };
 
-  // Claude 3.5 Sonnet Question Extractor for Homework
+  // Hybrid OCR + Google Gemini Question Extractor for Homework & Sheets
   const runAiParseHomework = async (fileDataUrl?: string, mime?: string, customNotes?: string) => {
     setIsHwAiParsing(true);
-    const notes = customNotes || hwAiNotes || 'استخرج وصيغ أسئلة اختيار من متعدد تفاعلية لمستر عمرو السيد';
+    const notes = customNotes || hwAiNotes || 'استخرج الأسئلة حرفياً مع الحفاظ على الرموز والمعادلات الكيميائية بدقة';
     try {
       const payload: any = {
         grade: hwGrade,
@@ -899,17 +904,41 @@ export const AdminPanelModal: React.FC = () => {
         payload.fileData = fileDataUrl;
         payload.mimeType = mime || 'image/jpeg';
       }
+      if (hwExtractedText.trim()) {
+        payload.rawText = hwExtractedText;
+      }
 
       const data = await parseQuizWithAiClient(payload);
+      if (data.unreadableImage) {
+        const clarityMsg =
+          data.error ||
+          'الصورة غير واضحة أو بها قص في النص. يُرجى إعادة تصوير أو رفع صورة أوضح للأسئلة.';
+        showNotice(`⚠️ ${clarityMsg}`);
+        setHwChatMessages((prev) => [
+          ...prev,
+          {
+            id: `ai_${Date.now()}`,
+            sender: 'ai',
+            text: `⚠️ ${clarityMsg}`,
+            time: 'الآن',
+          },
+        ]);
+        return;
+      }
+
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
         setHwExtractedQuestions(data.questions);
         if (!hwTitle && data.quizTitle) {
           setHwTitle(data.quizTitle);
         }
+        const totalPts = data.questions.reduce((acc: number, q: any) => acc + (typeof q.points === 'number' ? q.points : 1), 0);
+        if (totalPts > 0) {
+          setHwTotalMarks(String(totalPts));
+        }
         showNotice(
           data.warning
             ? `⚠️ ${data.warning}`
-            : `✨ استخرج Google Gemini AI ${data.questions.length} سؤال بنجاح فائق ودقة تامة!`
+            : `✨ استخرج محرك المنصة الهجين ${data.questions.length} سؤال بنجاح ودقة تامة!`
         );
         setHwChatMessages((prev) => [
           ...prev,
@@ -917,13 +946,13 @@ export const AdminPanelModal: React.FC = () => {
             id: `ai_${Date.now()}`,
             sender: 'ai',
             text: data.warning
-              ? `⚠️ ${data.warning} (تم تجهيز ${data.questions.length} سؤال بالمحرك الاحتياطي للمراجعة)`
-              : `تم استخراج وتوليد ${data.questions.length} سؤال بنجاح بالحرف الواحد وفقاً لتوجيهاتك! راجع الأسئلة في المحرر أدناه، مع الخيارات والإجابات النموذجية.`,
+              ? `⚠️ ${data.warning} (تم تجهيز ${data.questions.length} سؤال للمراجعة)`
+              : `تم استخراج ${data.questions.length} سؤال حرفياً بالرموز والمعادلات العلمية وفقاً لتوجيهاتك! راجع الأسئلة في المحرر أدناه.`,
             time: 'الآن',
           },
         ]);
       } else {
-        const errMsg = data.error || data.warning || 'تعذر استخراج الأسئلة بواسطة Google Gemini.';
+        const errMsg = data.error || data.warning || 'تعذر استخراج الأسئلة حالياً. يُرجى المحاولة مجدداً أو رفع صورة أوضح.';
         showNotice(`⚠️ ${errMsg}`);
         setHwChatMessages((prev) => [
           ...prev,
@@ -937,16 +966,16 @@ export const AdminPanelModal: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Gemini Parse error:', err);
-      showNotice('حدث خطأ أثناء الاتصال بمساعد Google Gemini.');
+      showNotice('حدث خطأ أثناء الاتصال بمحرك الاستخراج.');
     } finally {
       setIsHwAiParsing(false);
     }
   };
 
-  // Claude 3.5 Sonnet Question Extractor for Exams
+  // Hybrid OCR + Google Gemini Question Extractor for Exams
   const runAiParseExam = async (fileDataUrl?: string, mime?: string, customNotes?: string) => {
     setIsExamAiParsing(true);
-    const notes = customNotes || examAiNotes || 'استخرج وصيغ أسئلة امتحان كيمياء بنظام الاختيار من متعدد';
+    const notes = customNotes || examAiNotes || 'استخرج وصيغ أسئلة الامتحان حرفياً مع الحفاظ على الرموز العلمية';
     try {
       const payload: any = {
         grade: examGrade,
@@ -955,11 +984,31 @@ export const AdminPanelModal: React.FC = () => {
       if (fileDataUrl) {
         payload.fileData = fileDataUrl;
         payload.mimeType = mime || 'image/jpeg';
-      } else if (rawQuestionsText.trim()) {
+      }
+      if (rawQuestionsText.trim()) {
         payload.rawText = rawQuestionsText;
+      } else if (examExtractedText.trim()) {
+        payload.rawText = examExtractedText;
       }
 
       const data = await parseQuizWithAiClient(payload);
+      if (data.unreadableImage) {
+        const clarityMsg =
+          data.error ||
+          'الصورة غير واضحة أو بها قص في النص. يُرجى إعادة تصوير أو رفع صورة أوضح للأسئلة.';
+        showNotice(`⚠️ ${clarityMsg}`);
+        setExamChatMessages((prev) => [
+          ...prev,
+          {
+            id: `ai_${Date.now()}`,
+            sender: 'ai',
+            text: `⚠️ ${clarityMsg}`,
+            time: 'الآن',
+          },
+        ]);
+        return;
+      }
+
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
         setExamQuestions(data.questions);
         if (!examTitle && data.quizTitle) {
@@ -968,13 +1017,16 @@ export const AdminPanelModal: React.FC = () => {
         if (data.suggestedDurationMinutes) {
           setExamDuration(String(data.suggestedDurationMinutes));
         }
-        if (data.suggestedTotalMarks) {
+        const totalPts = data.questions.reduce((acc: number, q: any) => acc + (typeof q.points === 'number' ? q.points : 1), 0);
+        if (totalPts > 0) {
+          setExamMarks(String(totalPts));
+        } else if (data.suggestedTotalMarks) {
           setExamMarks(String(data.suggestedTotalMarks));
         }
         showNotice(
           data.warning
             ? `⚠️ ${data.warning}`
-            : `✨ تم استخراج وصياغة ${data.questions.length} سؤال للامتحان بواسطة Google Gemini بدقة فائقة!`
+            : `✨ تم استخراج ${data.questions.length} سؤال للامتحان بدقة 100%!`
         );
         setExamChatMessages((prev) => [
           ...prev,
@@ -982,13 +1034,13 @@ export const AdminPanelModal: React.FC = () => {
             id: `ai_${Date.now()}`,
             sender: 'ai',
             text: data.warning
-              ? `⚠️ ${data.warning} (تم تجهيز ${data.questions.length} سؤال بالمحرك الاحتياطي للمراجعة)`
-              : `تم توليد وصياغة ${data.questions.length} سؤال للامتحان بواسطة Google Gemini وفقاً لتوجيهاتك بالحرف الواحد! راجع الإجابات النموذجية ودرجات كل سؤال أدناه.`,
+              ? `⚠️ ${data.warning} (تم تجهيز ${data.questions.length} سؤال للمراجعة)`
+              : `تم استخراج وتنسيق ${data.questions.length} سؤال للامتحان حرفياً بالرموز والمعادلات وفقاً لتوجيهاتك! راجع الإجابات النموذجية ودرجات كل سؤال أدناه.`,
             time: 'الآن',
           },
         ]);
       } else {
-        const errMsg = data.error || data.warning || 'تعذر استخراج الأسئلة بواسطة Google Gemini.';
+        const errMsg = data.error || data.warning || 'تعذر استخراج الأسئلة حالياً. يُرجى المحاولة مجدداً أو رفع صورة أوضح.';
         showNotice(`⚠️ ${errMsg}`);
         setExamChatMessages((prev) => [
           ...prev,
@@ -1002,7 +1054,7 @@ export const AdminPanelModal: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Gemini Exam Parse error:', err);
-      showNotice('حدث خطأ أثناء المسح بمساعد Google Gemini.');
+      showNotice('حدث خطأ أثناء استخراج الأسئلة.');
     } finally {
       setIsExamAiParsing(false);
     }
@@ -1011,7 +1063,7 @@ export const AdminPanelModal: React.FC = () => {
   // AI Question Extraction from pasted text for Exams
   const runAiParsePastedText = async () => {
     if (!rawQuestionsText.trim()) {
-      showNotice('يرجى لصق نصوص الأسئلة أولاً لتحليلها بمساعد Google Gemini.');
+      showNotice('يرجى لصق نصوص الأسئلة أولاً لتحليلها.');
       return;
     }
     setIsExamAiParsing(true);
@@ -1026,10 +1078,12 @@ export const AdminPanelModal: React.FC = () => {
         if (!examTitle && data.quizTitle) {
           setExamTitle(data.quizTitle);
         }
+        const totalPts = data.questions.reduce((acc: number, q: any) => acc + (typeof q.points === 'number' ? q.points : 1), 0);
+        if (totalPts > 0) setExamMarks(String(totalPts));
         showNotice(
           data.warning
             ? `⚠️ ${data.warning}`
-            : `✨ قام مساعد Google Gemini بصياغة وتنسيق ${data.questions.length} سؤال للامتحان بنجاح!`
+            : `✨ تم تنسيق ${data.questions.length} سؤال للامتحان بنجاح بدقة علمية!`
         );
       } else {
         showNotice(`⚠️ ${data.error || data.warning || 'تعذر معالجة النص.'}`);
@@ -1042,12 +1096,13 @@ export const AdminPanelModal: React.FC = () => {
     }
   };
 
-  // Helper to handle local device homework file & prepare for Claude Chat (allows talking before extracting!)
+  // Helper to handle local device homework file with resolution/clarity checks & PDF text extraction
   const handleSelectHwFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setHwFileObj(file);
     setHwAttachedFile(file);
+    setHwExtractedText('');
 
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'xlsx' || ext === 'xls') setHwFileType('xls');
@@ -1059,155 +1114,108 @@ export const AdminPanelModal: React.FC = () => {
       setHwTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
 
-    showNotice(`📎 تم إرفاق (${file.name}) بنجاح! تحدث مع Google Gemini الآن ووجهه قبل استخراج الأسئلة.`);
-
-    // Ultra-fast client-side pre-optimization for instant transmission & OCR
     const optimized = await optimizeImageForAi(file);
     setHwFileUrl(optimized.dataUrl);
     setHwAttachedDataUrl(optimized.dataUrl);
     setHwAttachedMime(optimized.mimeType);
+    setHwExtractedText(optimized.extractedText || '');
 
-    // Prompt Google Gemini in chat so the teacher can instruct him!
+    if (optimized.quality && !optimized.quality.isValid) {
+      const warnMsg =
+        optimized.quality.warning ||
+        'الصورة غير واضحة أو باهتة ولا تسمح بقراءة الأسئلة بدقة. يُرجى رفع صورة أوضح.';
+      showNotice(`⚠️ ${warnMsg}`);
+      setHwChatMessages((prev) => [
+        ...prev,
+        {
+          id: `sys_${Date.now()}`,
+          sender: 'ai' as const,
+          text: `⚠️ تنبيه جودة الصورة للملف "${file.name}": ${warnMsg}`,
+          time: 'الآن',
+        },
+      ]);
+      return;
+    }
+
+    showNotice(`📎 تم إرفاق (${file.name}) وفحص جودته بنجاح! جاهز للاستخراج الدقيق.`);
+
     setHwChatMessages((prev) => [
       ...prev,
       {
         id: `sys_${Date.now()}`,
         sender: 'ai' as const,
-        text: `📎 تم إرفاق ملفك "${file.name}" بنجاح يا مستر عمرو! تفضل بالحديث معي وتوجيهي بما تريده بالضبط من هذا الملف بأي مادة (مثلاً: استخرج أول 5 أسئلة، غير الصياغة، احذف سؤالاً، ركز على فكرة محددة) وسأنفذ طلبك بالحرف الواحد ⚡ عبر Google Gemini.`,
+        text: `📎 تم إرفاق ملفك "${file.name}" بنجاح يا مستر عمرو${optimized.extractedText ? ' (مع قراءة طبقة النص تلقائياً لدقة 100%)' : ''}! وجّهني بما تريده أو اضغط على زر الاستخراج مباشرة.`,
         time: 'الآن',
       },
     ]);
   };
 
-  // Helper to handle local device exam sheet/image & prepare for Google Gemini Chat (allows talking before extracting!)
+  // Helper to handle local device exam sheet/image with resolution/clarity checks & PDF text extraction
   const handleSelectExamFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setExamFileObj(file);
     setExamAttachedFile(file);
+    setExamExtractedText('');
 
     if (!examTitle) {
       setExamTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
 
-    showNotice(`📎 تم إرفاق شيت الامتحان (${file.name}) بنجاح! تحدث مع Google Gemini ووجهه قبل استخراج الأسئلة.`);
-
-    // Ultra-fast client-side pre-optimization for instant transmission & OCR
     const optimized = await optimizeImageForAi(file);
     setExamFileUrl(optimized.dataUrl);
     setExamAttachedDataUrl(optimized.dataUrl);
     setExamAttachedMime(optimized.mimeType);
+    setExamExtractedText(optimized.extractedText || '');
 
-    // Prompt Google Gemini in chat so the teacher can instruct him!
+    if (optimized.quality && !optimized.quality.isValid) {
+      const warnMsg =
+        optimized.quality.warning ||
+        'الصورة غير واضحة أو باهتة ولا تسمح بقراءة الأسئلة بدقة. يُرجى رفع صورة أوضح.';
+      showNotice(`⚠️ ${warnMsg}`);
+      setExamChatMessages((prev) => [
+        ...prev,
+        {
+          id: `sys_${Date.now()}`,
+          sender: 'ai' as const,
+          text: `⚠️ تنبيه جودة الصورة للملف "${file.name}": ${warnMsg}`,
+          time: 'الآن',
+        },
+      ]);
+      return;
+    }
+
+    showNotice(`📎 تم إرفاق شيت الامتحان (${file.name}) وفحص جودته بنجاح!`);
+
     setExamChatMessages((prev) => [
       ...prev,
       {
         id: `sys_${Date.now()}`,
         sender: 'ai' as const,
-        text: `📎 تم إرفاق شيت الامتحان "${file.name}" بنجاح يا مستر عمرو! تفضل بالحديث معي لتحديد توجيهاتك وصياغة الأسئلة وسأنفذ كل شيء بالحرف الواحد قبل بدء الاستخراج ⚡ عبر Google Gemini.`,
+        text: `📎 تم إرفاق شيت الامتحان "${file.name}" بنجاح يا مستر عمرو${optimized.extractedText ? ' (مع قراءة طبقة النص تلقائياً لدقة 100%)' : ''}! تفضل بتحديد توجيهاتك أو ابدأ الاستخراج فوراً.`,
         time: 'الآن',
       },
     ]);
   };
 
   const parseAndSetHwQuestions = (rawText: string) => {
-    const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
-    const parsed: Question[] = [];
-    let currentText = '';
-    let currentOptions: string[] = [];
-    let currentCorrectIdx = 0;
-
-    for (const line of lines) {
-      const isQuestionStart =
-        /^(\d+[\.\-\)]|س\s*\d+|سؤال\s*\d+|Q\d+)/i.test(line) ||
-        (line.includes('?') && !currentText);
-
-      if (isQuestionStart || (!currentText && line.length > 5)) {
-        if (currentText) {
-          if (currentOptions.length < 2) {
-            currentOptions = ['الخيار (أ)', 'الخيار (ب)', 'الخيار (ج)', 'الخيار (د)'];
-          }
-          parsed.push({
-            id: `hw_q_${parsed.length + 1}`,
-            text: currentText,
-            options: currentOptions,
-            correctAnswerIndex: currentCorrectIdx,
-          });
-        }
-        currentText = line.replace(/^(\d+[\.\-\)]|س\s*\d+|سؤال\s*\d+|Q\d+)[:\-\s]*/i, '');
-        currentOptions = [];
-        currentCorrectIdx = 0;
-      } else if (currentText) {
-        currentOptions.push(line.replace(/^[أ-دA-D][\.\-\)]\s*/i, ''));
-      }
-    }
-
-    if (currentText) {
-      if (currentOptions.length < 2) {
-        currentOptions = ['الخيار (أ)', 'الخيار (ب)', 'الخيار (ج)', 'الخيار (د)'];
-      }
-      parsed.push({
-        id: `hw_q_${parsed.length + 1}`,
-        text: currentText,
-        options: currentOptions,
-        correctAnswerIndex: currentCorrectIdx,
-      });
-    }
-
+    const parsed = parseScientificQuestionsLocally(rawText, hwAiNotes);
     if (parsed.length > 0) {
       setHwExtractedQuestions(parsed);
-      showNotice(`تم استخراج والتعرف على ${parsed.length} سؤال للواجب بنجاح!`);
+      const totalPts = parsed.reduce((acc, q) => acc + (q.points ?? 1), 0);
+      setHwTotalMarks(String(totalPts));
+      showNotice(`تم التعرف على ${parsed.length} سؤال للواجب/الشيت بدقة علمية كاملة!`);
     }
   };
 
-  // Bulk Questions Parser (can parse 10, 50, 100, up to 500+ questions at once!)
+  // Bulk Verbatim Scientific Questions Parser (supports 500+ questions with Chemistry/Physics formulas)
   const parseAndSetQuestions = (rawText: string) => {
-    const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
-    const parsed: Question[] = [];
-    let currentText = '';
-    let currentOptions: string[] = [];
-    let currentCorrectIdx = 0;
-
-    for (const line of lines) {
-      const isQuestionStart =
-        /^(\d+[\.\-\)]|س\s*\d+|سؤال\s*\d+|Q\d+)/i.test(line) ||
-        (line.includes('?') && !currentText);
-
-      if (isQuestionStart || (!currentText && line.length > 5)) {
-        if (currentText) {
-          if (currentOptions.length < 2) {
-            currentOptions = ['الخيار (أ)', 'الخيار (ب)', 'الخيار (ج)', 'الخيار (د)'];
-          }
-          parsed.push({
-            id: `q_${parsed.length + 1}`,
-            text: currentText,
-            options: currentOptions,
-            correctAnswerIndex: currentCorrectIdx,
-          });
-        }
-        currentText = line.replace(/^(\d+[\.\-\)]|س\s*\d+|سؤال\s*\d+|Q\d+)[:\-\s]*/i, '');
-        currentOptions = [];
-        currentCorrectIdx = 0;
-      } else if (currentText) {
-        currentOptions.push(line.replace(/^[أ-دA-D][\.\-\)]\s*/i, ''));
-      }
-    }
-
-    if (currentText) {
-      if (currentOptions.length < 2) {
-        currentOptions = ['الخيار (أ)', 'الخيار (ب)', 'الخيار (ج)', 'الخيار (د)'];
-      }
-      parsed.push({
-        id: `q_${parsed.length + 1}`,
-        text: currentText,
-        options: currentOptions,
-        correctAnswerIndex: currentCorrectIdx,
-      });
-    }
-
+    const parsed = parseScientificQuestionsLocally(rawText, examAiNotes);
     if (parsed.length > 0) {
       setExamQuestions(parsed);
-      showNotice(`تم استخراج والتعرف على ${parsed.length} سؤال بنجاح!`);
+      const totalPts = parsed.reduce((acc, q) => acc + (q.points ?? 1), 0);
+      setExamMarks(String(totalPts));
+      showNotice(`تم التعرف على ${parsed.length} سؤال بدقة علمية كاملة!`);
     }
   };
 
@@ -1768,6 +1776,7 @@ export const AdminPanelModal: React.FC = () => {
             { id: 'exams', label: 'الامتحانات الذكية', icon: FileCheck2 },
             { id: 'gemini_ai', label: '🤖 لوحة Gemini الذكي الحقيقي', icon: Bot },
             { id: 'students', label: 'إدارة وتصريح الطلاب', icon: Users },
+            { id: 'student_data_section', label: 'قسم بيانات الطلاب', icon: Users },
             { id: 'receipts', label: 'طلبات الدفع والإيصالات', icon: Receipt },
             { id: 'broadcast', label: 'إرسال رسائل وتنبيهات', icon: Bell },
             { id: 'honor', label: 'لوحة الشرف وتكريم الطلاب', icon: Award },
@@ -2952,6 +2961,7 @@ export const AdminPanelModal: React.FC = () => {
                           setHwAttachedFile(null);
                           setHwAttachedDataUrl('');
                           setHwAttachedMime('');
+                          setHwExtractedText('');
                           setHwFileObj(null);
                           setHwFileUrl('');
                         }}
@@ -3470,6 +3480,7 @@ export const AdminPanelModal: React.FC = () => {
                           setExamAttachedFile(null);
                           setExamAttachedDataUrl('');
                           setExamAttachedMime('');
+                          setExamExtractedText('');
                           setExamFileObj(null);
                           setExamFileUrl('');
                         }}
@@ -4907,6 +4918,13 @@ export const AdminPanelModal: React.FC = () => {
             );
           })()}
 
+          {/* STANDALONE TAB: قسم بيانات الطلاب */}
+          {activeTab === 'student_data_section' && (
+            <div className="animate-fade-in">
+              <StudentDirectorySection sectionTitle="قسم بيانات الطلاب" />
+            </div>
+          )}
+
           {/* TAB: PAYMENT RECEIPTS & REVIEW (20-MIN TIMER & CLAUDE AI ASSISTANT) */}
           {activeTab === 'receipts' && (
             <div className="space-y-6">
@@ -6246,12 +6264,12 @@ export const AdminPanelModal: React.FC = () => {
                   <div className="p-3 bg-cyan-950/40 border border-cyan-800/40 rounded-xl text-xs text-slate-300 space-y-1.5">
                     <div className="font-bold text-cyan-300 flex items-center gap-1.5">
                       <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                      معلومات مهمة ومزايا:
+                      معلومات مهمة للمزامنة السحابية بين الأجهزة:
                     </div>
                     <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-300">
                       <li>تغيير هذه البيانات يقوم بتحديث جميع استدعاءات المنصة (الطلاب، المحاضرات، الامتحانات، الواجبات) فوراً.</li>
-                      <li>البيانات تحفظ محلياً في متصفحك وتبقى سارية تلقائياً عبر الجلسات.</li>
-                      <li>يمكنك أيضاً تزويدنا بالبيانات الجديدة مباشرة في المحادثة لنضعها كإعداد افتراضي دائم في كود المشروع وملف .env.</li>
+                      <li>تسجيل الدخول وإنشاء الحساب يقرأ ويكتب مباشرة في جدول <span className="font-mono text-cyan-300">profiles</span> السحابي على أي هاتف في العالم.</li>
+                      <li>تأكد من تشغيل كود SQL أدناه داخل Supabase SQL Editor لتفعيل كافة الأعمدة وصلاحيات القراءة والكتابة.</li>
                     </ul>
                   </div>
 
@@ -6280,6 +6298,104 @@ export const AdminPanelModal: React.FC = () => {
                     </button>
                   </div>
                 </form>
+
+                {/* Live Cloud Diagnostics & Required SQL Schema */}
+                <div className="pt-4 border-t border-cyan-900/40 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+                        <span>فحص الجاهزية السحابية وكود SQL المطلوب للربط من أي هاتف</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        يضمن فتح صلاحيات القراءة والكتابة لجدول الطلاب <span className="font-mono text-cyan-300">profiles</span> والامتحانات <span className="font-mono text-cyan-300">assignments</span> من أي جهاز.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isCheckingSbHealth}
+                      onClick={async () => {
+                        setIsCheckingSbHealth(true);
+                        const rep = await testSupabaseSchemaHealth();
+                        setSbHealthReport(rep);
+                        setIsCheckingSbHealth(false);
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isCheckingSbHealth ? 'animate-spin' : ''}`} />
+                      <span>{isCheckingSbHealth ? 'جاري الفحص...' : 'فحص اتصال الجداول الآن'}</span>
+                    </button>
+                  </div>
+
+                  {sbHealthReport && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                      <div className={`p-2.5 rounded-xl border ${sbHealthReport.profilesWritable ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-300' : 'bg-red-950/50 border-red-700/50 text-red-300'}`}>
+                        جدول الطلاب (profiles): {sbHealthReport.profilesWritable ? 'يعمل ✓' : 'مغلق ✗'}
+                      </div>
+                      <div className={`p-2.5 rounded-xl border ${sbHealthReport.hasPasswordColumn ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-300' : 'bg-amber-950/50 border-amber-700/50 text-amber-300'}`}>
+                        عمود كلمة المرور: {sbHealthReport.hasPasswordColumn ? 'موجود ✓' : 'يحتاج إضافة SQL'}
+                      </div>
+                      <div className={`p-2.5 rounded-xl border ${sbHealthReport.hasParentPhoneColumn ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-300' : 'bg-amber-950/50 border-amber-700/50 text-amber-300'}`}>
+                        عمود ولي الأمر: {sbHealthReport.hasParentPhoneColumn ? 'موجود ✓' : 'يحتاج إضافة SQL'}
+                      </div>
+                      <div className={`p-2.5 rounded-xl border ${sbHealthReport.assignmentsWritable ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-300' : 'bg-amber-950/50 border-amber-700/50 text-amber-300'}`}>
+                        جدول الامتحانات (assignments): {sbHealthReport.assignmentsWritable ? 'مفتوح ✓' : 'يحتاج إلغاء RLS'}
+                      </div>
+                    </div>
+                  )}
+
+                  {(() => {
+                    const sqlSnippet = `-- 1. تحديث جدول الطلاب ليشمل كافة البيانات وكلمة المرور وهاتف ولي الأمر
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS password text,
+  ADD COLUMN IF NOT EXISTS parent_phone text,
+  ADD COLUMN IF NOT EXISTS student_code text,
+  ADD COLUMN IF NOT EXISTS governorate text,
+  ADD COLUMN IF NOT EXISTS age integer,
+  ADD COLUMN IF NOT EXISTS subscription_type text;
+
+-- 2. تحديث جدول الامتحانات والواجبات لدعم النماذج السحابية
+ALTER TABLE public.assignments
+  ADD COLUMN IF NOT EXISTS description text,
+  ADD COLUMN IF NOT EXISTS lesson_title text,
+  ADD COLUMN IF NOT EXISTS time_limit_minutes integer,
+  ADD COLUMN IF NOT EXISTS total_marks integer,
+  ADD COLUMN IF NOT EXISTS kind text;
+
+-- 3. تفعيل القراءة والكتابة الفورية من أي هاتف أو متصفح جديد (RLS Disable)
+ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.courses DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.documents DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
+                    return (
+                      <div className="bg-[#050811] border border-slate-700/80 rounded-xl p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-cyan-300">
+                            كود SQL لإضافته في Supabase SQL Editor (تحديث الأعمدة + فتح الصلاحيات):
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(sqlSnippet);
+                              showNotice('📋 تم نسخ كود SQL! الصقه في SQL Editor داخل مشروعك في Supabase ثم اضغط Run.');
+                            }}
+                            className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>نسخ كود SQL</span>
+                          </button>
+                        </div>
+                        <pre
+                          dir="ltr"
+                          className="text-[10px] leading-relaxed text-slate-300 font-mono overflow-x-auto p-2 bg-black/40 rounded-lg border border-slate-800 select-all"
+                        >
+                          {sqlSnippet}
+                        </pre>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             </div>
           )}
