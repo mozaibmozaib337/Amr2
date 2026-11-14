@@ -1705,7 +1705,7 @@ export const AdminPanelModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md">
-      <div className="bg-[#0b1429] border border-cyan-800/50 rounded-2xl w-full max-w-5xl h-[94vh] overflow-hidden shadow-2xl flex flex-col text-slate-100">
+      <div className="bg-[#0b1429] border border-cyan-800/50 rounded-2xl w-full max-w-5xl h-[94dvh] overflow-hidden shadow-2xl flex flex-col text-slate-100">
         
         {/* Top Bar */}
         <div className="p-4 bg-[#080d1b] border-b border-cyan-900/40 flex items-center justify-between">
@@ -2448,7 +2448,7 @@ export const AdminPanelModal: React.FC = () => {
 
                 return (
                   <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in">
-                    <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
+                    <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
                       <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-full bg-cyan-950 border border-cyan-400 flex items-center justify-center text-cyan-300 font-bold">
@@ -4978,7 +4978,7 @@ export const AdminPanelModal: React.FC = () => {
                         setEditingStudent(null);
                         showNotice('✅ تم تعديل وحفظ بيانات الطالب بنجاح!');
                       }}
-                      className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4"
+                      className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4"
                     >
                       <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
                         <div className="flex items-center gap-2">
@@ -6629,7 +6629,7 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
       {/* MODAL 1: EDIT PUBLISHED COURSE + HIERARCHICAL LESSONS & SUBSECTIONS */}
       {editingLecture && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in">
-          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-5">
+          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[92dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-5">
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-cyan-400" />
@@ -6772,7 +6772,7 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
       {/* MODAL 2: EDIT PUBLISHED HOMEWORK & SHEETS (WITH FULL QUESTION REVIEW EDITOR) */}
       {editingHomework && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-fade-in">
-          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[94vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
+          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[94dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-amber-400" />
@@ -6930,7 +6930,7 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
       {/* MODAL 3: EDIT PUBLISHED EXAMS (WITH FULL QUESTION REVIEW & MARKS EDITOR) */}
       {editingExam && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 animate-fade-in">
-          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[94vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
+          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-4xl max-h-[94dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-cyan-400" />
@@ -7057,7 +7057,7 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
       {/* MODAL 4: EDIT PUBLISHED FILES / NOTES */}
       {editingFile && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in">
-          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
+          <div className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-xl max-h-[90dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40 gap-2">
               <h3 className="font-bold text-base text-white flex items-center gap-2">
                 <Edit3 className="w-5 h-5 text-emerald-400" />
@@ -7203,11 +7203,11 @@ ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <div className="max-h-[75vh] overflow-auto rounded-xl border border-slate-800 flex items-center justify-center bg-black">
+              <div className="max-h-[75dvh] overflow-auto rounded-xl border border-slate-800 flex items-center justify-center bg-black">
                 <img
                   src={selectedReceiptImage}
                   alt="إيصال الدفع"
-                  className="max-w-full max-h-[70vh] object-contain"
+                  className="max-w-full max-h-[70dvh] object-contain"
                 />
               </div>
             </div>

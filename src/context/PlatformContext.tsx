@@ -23,6 +23,7 @@ import {
   LiveLoginAlert,
   SubscriptionType,
   TeacherProfile,
+  QuestionBankItem,
 } from '../types';
 import {
   INITIAL_REGISTERED_USERS,
@@ -35,6 +36,7 @@ import {
   INITIAL_BROADCAST_NOTIFICATIONS,
   StudentAccessState,
 } from '../data/studentAnalyticsData';
+import { INITIAL_QUESTION_BANK } from '../data/chemistryQuestionBank';
 import {
   subscribeToCollection,
   saveDocument,
@@ -114,6 +116,9 @@ interface PlatformContextType {
   setActiveGrade: (grade: GradeLevel | 'all') => void;
   login: (emailOrPhone: string, name?: string, phone?: string, grade?: GradeLevel, code?: string) => boolean;
   logout: () => void;
+  isLogoutConfirmOpen: boolean;
+  setIsLogoutConfirmOpen: (open: boolean) => void;
+  requestLogout: () => void;
   // Lectures / Videos
   lectures: Lecture[];
   addLecture: (lecture: Omit<Lecture, 'id' | 'dateAdded'>) => Promise<{ success: boolean; error?: any; errorMessage?: string }> | void;
@@ -240,7 +245,7 @@ interface PlatformContextType {
     maxScore: number,
     timeSpentMinutes?: number,
     extraOptions?: {
-      assessmentType?: 'exam' | 'sheet' | 'homework';
+      assessmentType?: 'exam' | 'sheet' | 'homework' | 'evaluative';
       lessonTitle?: string;
       autoMcqScore?: number;
       autoMcqMax?: number;
@@ -248,8 +253,17 @@ interface PlatformContextType {
       essayScores?: Record<string, number>;
       blankCount?: number;
       status?: 'pending_teacher_review' | 'fully_graded';
+      startedAt?: string;
+      totalQuestions?: number;
+      solvedQuestionsCount?: number;
+      correctQuestionsCount?: number;
+      selectedAnswers?: Record<string, number>;
+      questionsSnapshot?: Question[];
     }
   ) => void;
+  questionBank: QuestionBankItem[];
+  addQuestionBankItem: (item: Omit<QuestionBankItem, 'id' | 'dateAdded'>) => void;
+  deleteQuestionBankItem: (id: string) => void;
   updateExamSubmissionGrade: (
     submissionId: string,
     teacherExtraScore: number,
@@ -398,6 +412,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [homeworks, setHomeworks] = useState<Homework[]>(INITIAL_CURRICULUM_HOMEWORKS);
   const [files, setFiles] = useState<FileDocument[]>([]);
   const [exams, setExams] = useState<Exam[]>(INITIAL_CURRICULUM_EXAMS);
+  const [questionBank, setQuestionBank] = useState<QuestionBankItem[]>(INITIAL_QUESTION_BANK);
   const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>(INITIAL_REGISTERED_USERS);
   const [studentActivities, setStudentActivities] = useState<StudentActivity[]>(INITIAL_STUDENT_ACTIVITIES);
   const [examSubmissions, setExamSubmissions] = useState<ExamSubmission[]>(INITIAL_EXAM_SUBMISSIONS);
@@ -420,6 +435,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [selectedCourseForDetails, setSelectedCourseForDetails] = useState<Lecture | null>(null);
 
   const [broadcastNotifications, setBroadcastNotifications] = useState<BroadcastNotification[]>(INITIAL_BROADCAST_NOTIFICATIONS);
@@ -523,6 +539,14 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (Array.isArray(data.homeworks) && data.homeworks.length > 0) setHomeworks(data.homeworks);
           if (Array.isArray(data.files) && data.files.length > 0) setFiles(data.files);
           if (Array.isArray(data.exams) && data.exams.length > 0) setExams(data.exams);
+          if (Array.isArray(data.questionBank) && data.questionBank.length > 0) {
+            setQuestionBank((prev) => {
+              const map = new Map<string, QuestionBankItem>();
+              prev.forEach((q) => map.set(q.id, q));
+              data.questionBank.forEach((q: QuestionBankItem) => map.set(q.id, q));
+              return Array.from(map.values());
+            });
+          }
           if (Array.isArray(data.studentActivities)) setStudentActivities(data.studentActivities);
           if (Array.isArray(data.examSubmissions)) setExamSubmissions(data.examSubmissions);
           if (data.studentAccessMap && typeof data.studentAccessMap === 'object') {
@@ -963,6 +987,22 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         subscribeToCollection<TeacherProfile>('teacher_profile', (items) => {
           if (items.length > 0) setTeacherProfile(items[0]);
         }, [DEFAULT_TEACHER_PROFILE])
+      );
+
+      unsubscribes.push(
+        subscribeToCollection<QuestionBankItem>('question_bank', (items) => {
+          if (items.length > 0) {
+            setQuestionBank((prev) => mergeByKey(prev, items));
+          }
+        }, INITIAL_QUESTION_BANK)
+      );
+
+      unsubscribes.push(
+        subscribeToCollection<ExamSubmission>('exam_submissions', (items) => {
+          if (items.length > 0) {
+            setExamSubmissions((prev) => mergeByKey(prev, items));
+          }
+        }, INITIAL_EXAM_SUBMISSIONS)
       );
     } catch (e) {
       console.warn('[Firestore] Error attaching listeners:', e);
@@ -1448,7 +1488,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return !!studentAccessMap[studentId]?.lectures[lectureId]?.completed;
   };
 
-  // Live Tracking: Record assessment submission (Exam / Sheet / Homework) with smart MCQ + Essay grading
+  // Live Tracking: Record assessment submission (Exam / Sheet / Homework / Evaluative) with smart MCQ + Essay grading
   const recordExamResult = (
     examId: string,
     examTitle: string,
@@ -1456,7 +1496,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     maxScore: number,
     timeSpentMinutes: number = 1,
     extraOptions?: {
-      assessmentType?: 'exam' | 'sheet' | 'homework';
+      assessmentType?: 'exam' | 'sheet' | 'homework' | 'evaluative';
       lessonTitle?: string;
       autoMcqScore?: number;
       autoMcqMax?: number;
@@ -1464,6 +1504,12 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       essayScores?: Record<string, number>;
       blankCount?: number;
       status?: 'pending_teacher_review' | 'fully_graded';
+      startedAt?: string;
+      totalQuestions?: number;
+      solvedQuestionsCount?: number;
+      correctQuestionsCount?: number;
+      selectedAnswers?: Record<string, number>;
+      questionsSnapshot?: Question[];
     }
   ) => {
     if (!currentUser) return;
@@ -1471,6 +1517,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const safeMax = maxScore > 0 ? maxScore : 1;
     const percentage = Math.round((score / safeMax) * 100);
     const assessmentType = extraOptions?.assessmentType || 'exam';
+
+    const priorAttemptsCount = examSubmissions.filter(
+      (s) => s.examId === examId && s.studentId === currentUser.id && (s.assessmentType || 'exam') === assessmentType
+    ).length;
 
     const submission: ExamSubmission = {
       id: 'sub_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
@@ -1488,7 +1538,14 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       maxScore,
       percentage,
       timeSpentMinutes,
+      startedAt: extraOptions?.startedAt || nowStr,
       submittedAt: nowStr,
+      attemptNumber: priorAttemptsCount + 1,
+      totalQuestions: extraOptions?.totalQuestions,
+      solvedQuestionsCount: extraOptions?.solvedQuestionsCount,
+      correctQuestionsCount: extraOptions?.correctQuestionsCount,
+      selectedAnswers: extraOptions?.selectedAnswers,
+      questionsSnapshot: extraOptions?.questionsSnapshot,
       autoMcqScore: extraOptions?.autoMcqScore !== undefined ? extraOptions.autoMcqScore : score,
       autoMcqMax: extraOptions?.autoMcqMax !== undefined ? extraOptions.autoMcqMax : maxScore,
       essayAnswers: extraOptions?.essayAnswers || {},
@@ -1498,51 +1555,48 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       teacherGraded: false,
     };
 
-    // Replace previous submission by same student for the same exam/sheet/homework if re-graded or updated
-    setExamSubmissions((prev) => {
-      const filtered = prev.filter(
-        (s) => !(s.examId === examId && s.studentId === currentUser.id && (s.assessmentType || 'exam') === assessmentType)
-      );
-      return [submission, ...filtered];
-    });
+    // Preserve attempt history so student can view all attempts and attempt numbers in حسابي
+    setExamSubmissions((prev) => [submission, ...prev]);
     saveDocument('exam_submissions', submission.id, submission);
     patchServerCollection('examSubmissions', 'upsert', { item: submission });
 
-    setStudentAccessMap((prev) => {
-      const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
-      if (assessmentType === 'sheet' || assessmentType === 'homework') {
-        const hwUpdate = { [examId]: { solved: true, score, maxScore, percentage, date: nowStr } };
+    if (assessmentType !== 'evaluative') {
+      setStudentAccessMap((prev) => {
+        const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
+        if (assessmentType === 'sheet' || assessmentType === 'homework') {
+          const hwUpdate = { [examId]: { solved: true, score, maxScore, percentage, date: nowStr } };
+          patchServerCollection('studentAccessMap', 'upsert', {
+            id: currentUser.id,
+            item: { homeworks: hwUpdate },
+          });
+          return {
+            ...prev,
+            [currentUser.id]: {
+              ...current,
+              homeworks: {
+                ...current.homeworks,
+                ...hwUpdate,
+              },
+            },
+          };
+        }
+        const exUpdate = { [examId]: { taken: true, score, maxScore, percentage, date: nowStr } };
         patchServerCollection('studentAccessMap', 'upsert', {
           id: currentUser.id,
-          item: { homeworks: hwUpdate },
+          item: { exams: exUpdate },
         });
         return {
           ...prev,
           [currentUser.id]: {
             ...current,
-            homeworks: {
-              ...current.homeworks,
-              ...hwUpdate,
+            exams: {
+              ...current.exams,
+              ...exUpdate,
             },
           },
         };
-      }
-      const exUpdate = { [examId]: { taken: true, score, maxScore, percentage, date: nowStr } };
-      patchServerCollection('studentAccessMap', 'upsert', {
-        id: currentUser.id,
-        item: { exams: exUpdate },
       });
-      return {
-        ...prev,
-        [currentUser.id]: {
-          ...current,
-          exams: {
-            ...current.exams,
-            ...exUpdate,
-          },
-        },
-      };
-    });
+    }
 
     recordActivity({
       studentId: currentUser.id,
@@ -1550,7 +1604,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       studentPhone: currentUser.phone,
       studentCode: currentUser.studentCode,
       grade: currentUser.grade,
-      type: assessmentType === 'exam' ? 'exam_submit' : 'homework_submit',
+      type: assessmentType === 'exam' || assessmentType === 'evaluative' ? 'exam_submit' : 'homework_submit',
       itemId: examId,
       itemTitle: examTitle,
       score,
@@ -1713,13 +1767,13 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Ranking: تفنيد وترتيب أعلى الدرجات في الامتحان أو الشيت الواحد من الأول للأخير بدون أي حد أقصى
+  // Ranking: تفنيد وترتيب أعلى الدرجات في الامتحان أو الشيت الواحد مع أخذ أفضل محاولة لكل طالب
   const getExamRankings = (examId: string, typeFilter?: 'exam' | 'sheet'): ExamSubmission[] => {
-    return examSubmissions
+    const filtered = examSubmissions
       .filter((sub) => {
         if (sub.examId !== examId) return false;
         const subType = sub.assessmentType || 'exam';
-        if (subType === 'homework') return false; // لا تظهر الواجبات العادية في الأوائل
+        if (subType === 'homework' || subType === 'evaluative') return false;
         if (typeFilter) {
           return subType === typeFilter;
         }
@@ -1728,12 +1782,22 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         if (b.percentage !== a.percentage) return b.percentage - a.percentage;
-        return a.timeSpentMinutes - b.timeSpentMinutes; // الأسرع في الإنهاء يتقدم عند التعادل
-      })
-      .map((sub, index) => ({
-        ...sub,
-        rank: index + 1,
-      }));
+        return a.timeSpentMinutes - b.timeSpentMinutes;
+      });
+
+    const seenStudents = new Set<string>();
+    const uniqueBest: ExamSubmission[] = [];
+    for (const sub of filtered) {
+      if (!seenStudents.has(sub.studentId)) {
+        seenStudents.add(sub.studentId);
+        uniqueBest.push(sub);
+      }
+    }
+
+    return uniqueBest.map((sub, index) => ({
+      ...sub,
+      rank: index + 1,
+    }));
   };
 
   // Individual Student Complete Dossier (بيانات كاملة لكل طالب تشمل الامتحانات والشيتات والواجبات والحضور)
@@ -1860,6 +1924,11 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const logout = () => {
     setCurrentUser(null);
     setIsAdminPanelOpen(false);
+    setIsLogoutConfirmOpen(false);
+  };
+
+  const requestLogout = () => {
+    setIsLogoutConfirmOpen(true);
   };
 
   const generateUuid = () => {
@@ -2053,6 +2122,24 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     patchServerCollection('exams', 'delete', { id });
     setExams((prev) => prev.filter((item) => item.id !== id));
     setLastAutoSavedAt(new Date().toISOString());
+  };
+
+  // Add / Delete Question Bank Item
+  const addQuestionBankItem = (item: Omit<QuestionBankItem, 'id' | 'dateAdded'>) => {
+    const newItem: QuestionBankItem = {
+      ...item,
+      id: generateUuid(),
+      dateAdded: new Date().toISOString().split('T')[0],
+    };
+    setQuestionBank((prev) => [newItem, ...prev]);
+    saveDocument('question_bank', newItem.id, newItem);
+    patchServerCollection('questionBank', 'upsert', { item: newItem });
+  };
+
+  const deleteQuestionBankItem = (id: string) => {
+    deleteDocument('question_bank', id);
+    patchServerCollection('questionBank', 'delete', { id });
+    setQuestionBank((prev) => prev.filter((q) => q.id !== id));
   };
 
   // Add / Delete Honored Students
@@ -2275,6 +2362,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const approvePaymentRequest = (id: string) => {
+    const targetReq = paymentRequests.find((req) => req.id === id);
     const revTime = new Date().toISOString().replace('T', ' ').substring(0, 16);
     setPaymentRequests((prev) =>
       prev.map((req) =>
@@ -2285,6 +2373,42 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     updateDocument('payment_requests', id, { status: 'approved', reviewedAt: revTime });
     patchServerCollection('paymentRequests', 'update', { id, item: { status: 'approved', reviewedAt: revTime } });
+
+    // Credit student's wallet immediately when approving a wallet_topup receipt
+    if (targetReq && targetReq.lectureId === 'wallet_topup' && targetReq.status !== 'approved') {
+      const topUpAmount = Number(targetReq.amount || 0);
+      if (topUpAmount > 0) {
+        const matchedStudent = registeredAccounts.find(
+          (acc) =>
+            acc.id === targetReq.studentId ||
+            ensureUuid(acc.id) === ensureUuid(targetReq.studentId) ||
+            (acc.phone && acc.phone === targetReq.studentPhone)
+        );
+        if (matchedStudent) {
+          const nextWallet = (matchedStudent.walletBalance || 0) + topUpAmount;
+          updateRegisteredStudent(matchedStudent.id, { walletBalance: nextWallet });
+        }
+        if (
+          currentUser &&
+          (currentUser.id === targetReq.studentId ||
+            ensureUuid(currentUser.id) === ensureUuid(targetReq.studentId) ||
+            (targetReq.studentPhone && currentUser.phone === targetReq.studentPhone))
+        ) {
+          setCurrentUser((prev) =>
+            prev ? { ...prev, walletBalance: (prev.walletBalance || 0) + topUpAmount } : prev
+          );
+        }
+        const tx: WalletTransaction = {
+          id: 'tx_topup_' + Date.now(),
+          type: 'deposit',
+          amount: topUpAmount,
+          date: new Date().toLocaleString('ar-EG'),
+          description: `شحن المحفظة (${targetReq.paymentMethodName}) - موافقة الإدارة`,
+        };
+        setTransactions((prev) => [tx, ...prev]);
+        patchServerCollection('transactions', 'upsert', { item: tx });
+      }
+    }
   };
 
   const rejectPaymentRequest = (id: string, reason?: string) => {
@@ -2582,6 +2706,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setActiveGrade,
         login,
         logout,
+        isLogoutConfirmOpen,
+        setIsLogoutConfirmOpen,
+        requestLogout,
         lectures,
         addLecture,
         updateLecture,
@@ -2598,6 +2725,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addExam,
         updateExam,
         deleteExam,
+        questionBank,
+        addQuestionBankItem,
+        deleteQuestionBankItem,
         honoredStudents,
         addHonoredStudent,
         deleteHonoredStudent,

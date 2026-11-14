@@ -350,7 +350,7 @@ export const StudentActivityTracker: React.FC = () => {
       {/* COMPREHENSIVE INDIVIDUAL STUDENT DOSSIER MODAL */}
       {activeDossier && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-[#0b1428] border border-cyan-800/50 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl relative text-slate-100 max-h-[90vh] flex flex-col">
+          <div className="bg-[#0b1428] border border-cyan-800/50 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl relative text-slate-100 max-h-[90dvh] flex flex-col">
             
             {/* Modal Header */}
             <div className="p-5 border-b border-cyan-900/40 flex items-center justify-between bg-gradient-to-r from-[#0d1a38] to-[#0b1428] shrink-0">

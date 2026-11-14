@@ -256,7 +256,7 @@ export interface ExamSubmission {
   id: string;
   examId: string;
   examTitle: string;
-  assessmentType?: 'exam' | 'sheet' | 'homework'; // تمييز الامتحان عن الشيت عن الواجب
+  assessmentType?: 'exam' | 'sheet' | 'homework' | 'evaluative'; // تمييز الامتحان عن الشيت عن الواجب عن التقييمي
   lessonTitle?: string;
   studentId: string;
   studentName: string;
@@ -268,7 +268,14 @@ export interface ExamSubmission {
   maxScore: number;
   percentage: number;
   timeSpentMinutes: number;
+  startedAt?: string;
   submittedAt: string;
+  attemptNumber?: number;
+  totalQuestions?: number;
+  solvedQuestionsCount?: number;
+  correctQuestionsCount?: number;
+  selectedAnswers?: Record<string, number>;
+  questionsSnapshot?: Question[];
   rank?: number;
   autoMcqScore?: number;
   autoMcqMax?: number;
@@ -280,6 +287,14 @@ export interface ExamSubmission {
   status?: 'pending_teacher_review' | 'fully_graded';
   gradedBy?: string;
   gradedAt?: string;
+}
+
+export interface QuestionBankItem extends Question {
+  grade: GradeLevel;
+  chapterTitle: string;
+  lessonTitle: string;
+  difficulty?: 'easy' | 'medium' | 'hard';
+  dateAdded?: string;
 }
 
 export interface StudentDossier {

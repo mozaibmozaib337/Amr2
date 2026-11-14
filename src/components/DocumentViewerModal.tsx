@@ -353,12 +353,12 @@ export const DocumentViewerModal: React.FC = () => {
       ref={modalContainerRef}
       onContextMenu={(e) => e.preventDefault()}
       className={`fixed inset-0 z-50 flex items-center justify-center ${
-        isFullscreen ? 'p-0 w-screen h-screen' : 'p-2 sm:p-4'
+        isFullscreen ? 'p-0 w-screen h-dvh' : 'p-2 sm:p-4'
       } bg-black/95 backdrop-blur-md animate-fade-in select-none`}
     >
       <div
         className={`bg-[#0b1429] border border-cyan-800/60 ${
-          isFullscreen ? 'w-full h-full rounded-none' : 'rounded-2xl w-full max-w-7xl h-[95vh]'
+          isFullscreen ? 'w-full h-full rounded-none' : 'rounded-2xl w-full max-w-7xl h-[95dvh]'
         } overflow-hidden shadow-2xl flex flex-col text-slate-100 transition-all relative`}
       >
         {/* Toast Notification */}
@@ -721,7 +721,7 @@ export const DocumentViewerModal: React.FC = () => {
                   <img
                     src={fileUrl}
                     alt={title || fileName}
-                    className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+                    className="max-w-full max-h-[85dvh] object-contain rounded-lg shadow-2xl"
                   />
                 </div>
               ) : (

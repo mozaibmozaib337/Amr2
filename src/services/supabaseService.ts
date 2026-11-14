@@ -212,6 +212,8 @@ const TABLE_MAPPINGS: Record<string, string[]> = {
   exams: ['assignments'],
   assignments: ['assignments'],
   payment_requests: ['payment_requests'],
+  exam_submissions: ['exam_submissions'],
+  question_bank: ['question_bank'],
 };
 
 /**
@@ -294,6 +296,55 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       amount: Number(data.amount ?? 0),
       status: String(data.status || 'pending_review'),
       receipt_url: String(data.screenshotUrl || data.receipt_url || ''),
+    };
+  }
+
+  if (tbl === 'exam_submissions') {
+    return {
+      id: validId,
+      exam_id: String(data.examId || ''),
+      exam_title: String(data.examTitle || ''),
+      assessment_type: String(data.assessmentType || 'exam'),
+      lesson_title: data.lessonTitle || undefined,
+      student_id: data.studentId ? ensureUuid(String(data.studentId)) : null,
+      student_name: String(data.studentName || ''),
+      student_phone: String(data.studentPhone || ''),
+      student_code: data.studentCode || undefined,
+      grade: String(data.grade || 'sec3'),
+      governorate: String(data.governorate || ''),
+      score: Number(data.score ?? 0),
+      max_score: Number(data.maxScore ?? 1),
+      percentage: Number(data.percentage ?? 0),
+      time_spent_minutes: Number(data.timeSpentMinutes ?? 1),
+      attempt_number: Number(data.attemptNumber ?? 1),
+      total_questions: data.totalQuestions !== undefined ? Number(data.totalQuestions) : undefined,
+      solved_questions_count: data.solvedQuestionsCount !== undefined ? Number(data.solvedQuestionsCount) : undefined,
+      correct_questions_count: data.correctQuestionsCount !== undefined ? Number(data.correctQuestionsCount) : undefined,
+      started_at: data.startedAt || undefined,
+      submitted_at: data.submittedAt || undefined,
+      selected_answers: data.selectedAnswers || undefined,
+      essay_answers: data.essayAnswers || undefined,
+      essay_scores: data.essayScores || undefined,
+      questions_snapshot: Array.isArray(data.questionsSnapshot) ? data.questionsSnapshot : undefined,
+      blank_count: data.blankCount !== undefined ? Number(data.blankCount) : undefined,
+      status: data.status || 'fully_graded',
+    };
+  }
+
+  if (tbl === 'question_bank') {
+    return {
+      id: validId,
+      grade: String(data.grade || 'sec3'),
+      chapter_title: String(data.chapterTitle || ''),
+      lesson_title: String(data.lessonTitle || ''),
+      difficulty: String(data.difficulty || 'medium'),
+      type: String(data.type || 'mcq'),
+      points: Number(data.points ?? 1),
+      text: String(data.text || ''),
+      options: Array.isArray(data.options) ? data.options : [],
+      correct_answer_index: Number(data.correctAnswerIndex ?? 0),
+      explanation: data.explanation || undefined,
+      model_answer: data.modelAnswer || undefined,
     };
   }
 
@@ -551,6 +602,57 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
       status: row.status || base.status || 'pending_review',
       screenshotUrl: row.receipt_url || base.screenshotUrl || '',
       submittedAt: base.submittedAt || (row.created_at ? String(row.created_at).replace('T', ' ').substring(0, 16) : ''),
+    };
+  }
+
+  if (tbl === 'exam_submissions') {
+    return {
+      ...base,
+      id: base.id || String(row.id),
+      examId: row.exam_id || base.examId || '',
+      examTitle: row.exam_title || base.examTitle || '',
+      assessmentType: row.assessment_type || base.assessmentType || 'exam',
+      lessonTitle: row.lesson_title || base.lessonTitle,
+      studentId: base.studentId || String(row.student_id || ''),
+      studentName: row.student_name || base.studentName || '',
+      studentPhone: row.student_phone || base.studentPhone || '',
+      studentCode: row.student_code || base.studentCode,
+      grade: row.grade || base.grade || 'sec3',
+      governorate: row.governorate || base.governorate || '',
+      score: Number(row.score ?? base.score ?? 0),
+      maxScore: Number(row.max_score ?? base.maxScore ?? 1),
+      percentage: Number(row.percentage ?? base.percentage ?? 0),
+      timeSpentMinutes: Number(row.time_spent_minutes ?? base.timeSpentMinutes ?? 1),
+      attemptNumber: Number(row.attempt_number ?? base.attemptNumber ?? 1),
+      totalQuestions: row.total_questions ?? base.totalQuestions,
+      solvedQuestionsCount: row.solved_questions_count ?? base.solvedQuestionsCount,
+      correctQuestionsCount: row.correct_questions_count ?? base.correctQuestionsCount,
+      startedAt: row.started_at || base.startedAt,
+      submittedAt: row.submitted_at || base.submittedAt || '',
+      selectedAnswers: row.selected_answers || base.selectedAnswers,
+      essayAnswers: row.essay_answers || base.essayAnswers,
+      essayScores: row.essay_scores || base.essayScores,
+      questionsSnapshot: row.questions_snapshot || base.questionsSnapshot,
+      blankCount: row.blank_count ?? base.blankCount,
+      status: row.status || base.status || 'fully_graded',
+    };
+  }
+
+  if (tbl === 'question_bank') {
+    return {
+      ...base,
+      id: base.id || String(row.id),
+      grade: row.grade || base.grade || 'sec3',
+      chapterTitle: row.chapter_title || base.chapterTitle || 'الباب الأول',
+      lessonTitle: row.lesson_title || base.lessonTitle || 'الدرس الأول',
+      difficulty: row.difficulty || base.difficulty || 'medium',
+      type: row.type || base.type || 'mcq',
+      points: Number(row.points ?? base.points ?? 1),
+      text: row.text || base.text || '',
+      options: Array.isArray(row.options) ? row.options : base.options || [],
+      correctAnswerIndex: Number(row.correct_answer_index ?? base.correctAnswerIndex ?? 0),
+      explanation: row.explanation || base.explanation,
+      modelAnswer: row.model_answer || base.modelAnswer,
     };
   }
 

@@ -24,7 +24,7 @@ export interface AssessmentConfig {
   id: string;
   title: string;
   lessonTitle?: string;
-  mode: 'exam' | 'sheet' | 'homework';
+  mode: 'exam' | 'sheet' | 'homework' | 'evaluative';
   grade: string;
   durationMinutes?: number;
   totalMarks?: number;
@@ -47,7 +47,7 @@ interface StoredAttempt {
   currentQuestionIndex: number;
 }
 
-export function getAssessmentMaxWindowMinutes(mode: 'exam' | 'sheet' | 'homework', configuredMinutes?: number): number {
+export function getAssessmentMaxWindowMinutes(mode: 'exam' | 'sheet' | 'homework' | 'evaluative', configuredMinutes?: number): number {
   if (mode === 'homework') {
     const val = configuredMinutes && configuredMinutes > 0 ? configuredMinutes : 1440;
     return Math.min(val, 1440); // حد أقصى يوم واحد (24 ساعة) للواجب
@@ -55,6 +55,10 @@ export function getAssessmentMaxWindowMinutes(mode: 'exam' | 'sheet' | 'homework
   if (mode === 'sheet') {
     const val = configuredMinutes && configuredMinutes > 0 ? configuredMinutes : 180;
     return Math.min(val, 180); // حد أقصى 3 ساعات للشيت
+  }
+  if (mode === 'evaluative') {
+    const val = configuredMinutes && configuredMinutes > 0 ? configuredMinutes : 30;
+    return Math.min(val, 180);
   }
   const val = configuredMinutes && configuredMinutes > 0 ? configuredMinutes : 60;
   return Math.min(val, 240); // حد أقصى 4 ساعات للامتحان
@@ -230,6 +234,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
     const questions = assessment.questions;
     let earnedMcq = 0;
     let blankCount = 0;
+    let correctQuestionsCount = 0;
 
     questions.forEach((q) => {
       const pts = getQuestionPoints(q, questions, assessment.totalMarks);
@@ -244,6 +249,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
           blankCount += 1; // سؤال اختياري متروك فارغاً = 0 تلقائياً
         } else if (chosen === q.correctAnswerIndex) {
           earnedMcq += pts;
+          correctQuestionsCount += 1;
         }
       }
     });
@@ -256,6 +262,8 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
     const hasAnsweredEssay = questions.some((q) => q.type === 'essay' && !!(essayAnswers[q.id] || '').trim());
     const needsTeacherReview = hasEssay && hasAnsweredEssay;
     const elapsedMinutes = Math.max(1, Math.round((Date.now() - startedAt) / 60000));
+    const startedAtStr = new Date(startedAt).toISOString().replace('T', ' ').substring(0, 16);
+    const solvedQuestionsCount = Math.max(0, questions.length - blankCount);
 
     recordExamResult(assessment.id, assessment.title, autoMcqScore, totalMax, elapsedMinutes, {
       assessmentType: assessment.mode,
@@ -265,6 +273,12 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
       essayAnswers,
       blankCount,
       status: needsTeacherReview ? 'pending_teacher_review' : 'fully_graded',
+      startedAt: startedAtStr,
+      totalQuestions: questions.length,
+      solvedQuestionsCount,
+      correctQuestionsCount,
+      selectedAnswers,
+      questionsSnapshot: questions,
     });
 
     if (assessment.mode === 'homework' || assessment.mode === 'sheet') {
@@ -331,6 +345,8 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
       ? 'الشيت'
       : assessment.mode === 'homework'
       ? 'الواجب'
+      : assessment.mode === 'evaluative'
+      ? 'الاختبار التقييمي'
       : 'الاختبار';
 
   const windowBadgeText =
@@ -338,6 +354,8 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
       ? `متاح الاستكمال خلال ${windowMinutes >= 60 ? `${Math.round(windowMinutes / 60)} ساعة` : `${windowMinutes} دقيقة`} من الفتح`
       : assessment.mode === 'sheet'
       ? `حد أقصى للشيت: ${windowMinutes} دقيقة (3 ساعات كحد أقصى)`
+      : assessment.mode === 'evaluative'
+      ? `اختبار خاص لتقييم مستواك: ${windowMinutes} دقيقة`
       : `حد أقصى للاختبار: ${windowMinutes} دقيقة (4 ساعات كحد أقصى)`;
 
   const handleSaveTeacherEssayGrades = () => {
@@ -390,7 +408,13 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
         <div className="space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-              {assessment.mode === 'sheet' ? 'شيت درس' : assessment.mode === 'homework' ? 'واجب منزلي' : 'امتحان إلكتروني'}
+              {assessment.mode === 'sheet'
+                ? 'شيت درس'
+                : assessment.mode === 'homework'
+                ? 'واجب منزلي'
+                : assessment.mode === 'evaluative'
+                ? 'امتحان خاص تقييمي'
+                : 'امتحان إلكتروني'}
             </span>
             {assessment.lessonTitle && (
               <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
@@ -961,7 +985,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
         >
           <div
             className={`bg-[#0b1429] border-2 border-cyan-500/50 text-slate-100 shadow-2xl flex flex-col overflow-hidden transition-all ${
-              isSummaryFullscreen ? 'w-full h-full rounded-none' : 'w-full max-w-2xl max-h-[90vh] rounded-3xl'
+              isSummaryFullscreen ? 'w-full h-full rounded-none' : 'w-full max-w-2xl max-h-[90dvh] rounded-3xl'
             }`}
           >
             {/* Modal Header */}

@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       const err = this.state.error;
       return (
-        <div className="min-h-screen bg-[#050811] text-slate-100 flex items-center justify-center p-4">
+        <div className="min-h-dvh bg-[#050811] text-slate-100 flex items-center justify-center p-4">
           <div className="bg-[#0b1429] border border-cyan-800/40 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-center space-y-4 shadow-2xl">
             <div className="w-14 h-14 mx-auto rounded-full bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
               <AlertCircle className="w-7 h-7" />

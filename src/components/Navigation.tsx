@@ -1,3 +1,4 @@
+import React from 'react';
 import {
   LayoutDashboard,
   PlaySquare,
@@ -9,9 +10,9 @@ import {
   Headphones,
   Sliders,
   Bot,
-  Sparkles,
   ClipboardList,
   Medal,
+  UserCircle2,
 } from 'lucide-react';
 import { usePlatform, ADMIN_EMAIL } from '../context/PlatformContext';
 
@@ -21,11 +22,11 @@ interface NavigationProps {
 }
 
 export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab }) => {
-  const { currentUser, setIsAdminPanelOpen, lectures, homeworks, exams, files } = usePlatform();
+  const { currentUser, setIsAdminPanelOpen } = usePlatform();
   const isAdminOrSec =
     currentUser?.role === 'admin' ||
     currentUser?.role === 'secretary' ||
-    currentUser?.email === ADMIN_EMAIL;
+    currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   const navItems = [
     {
@@ -78,6 +79,11 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
         ]
       : []),
     {
+      id: 'student_profile',
+      label: 'حسابي',
+      icon: UserCircle2,
+    },
+    {
       id: 'wallet',
       label: 'محفظتي وكود الشحن',
       icon: Wallet,
@@ -98,7 +104,6 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
     <div className="bg-[#0a1224] border-b border-cyan-950/40 sticky top-14 md:top-[73px] z-20">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between overflow-x-auto no-scrollbar py-2 gap-1 md:gap-2">
-          
           <div className="flex items-center gap-1 md:gap-2 shrink-0">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -107,6 +112,7 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
               return (
                 <button
                   key={item.id}
+                  type="button"
                   onClick={() => setActiveTab(item.id)}
                   className={`flex items-center gap-2 px-3.5 py-2 text-xs md:text-sm font-semibold rounded-xl transition-all whitespace-nowrap cursor-pointer ${
                     isActive
@@ -118,7 +124,17 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? (item.isSpecial ? 'text-amber-400' : 'text-cyan-400') : (item.isSpecial ? 'text-amber-400' : 'text-slate-400')}`} />
+                  <Icon
+                    className={`w-4 h-4 shrink-0 ${
+                      isActive
+                        ? item.isSpecial
+                          ? 'text-amber-400'
+                          : 'text-cyan-400'
+                        : item.isSpecial
+                        ? 'text-amber-400'
+                        : 'text-slate-400'
+                    }`}
+                  />
                   <span>{item.label}</span>
                 </button>
               );
@@ -128,6 +144,7 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
           {/* Quick Admin Control Link if logged in as Admin or Secretary */}
           {isAdminOrSec && (
             <button
+              type="button"
               onClick={() => setIsAdminPanelOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 text-amber-300 hover:text-white hover:bg-amber-500/30 text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer shrink-0 me-1"
             >
@@ -135,7 +152,6 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab 
               <span>لوحة التحكم والإدارة +</span>
             </button>
           )}
-
         </div>
       </div>
     </div>

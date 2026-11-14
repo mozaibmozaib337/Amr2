@@ -460,7 +460,7 @@ export const TopRankingsDirectorySection: React.FC = () => {
       {/* Teacher Essay Grading Modal */}
       {gradingSubmission && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-3 bg-black/90 backdrop-blur-md animate-fade-in text-slate-100">
-          <div className="bg-[#0b1429] border-2 border-amber-500/60 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
+          <div className="bg-[#0b1429] border-2 border-amber-500/60 rounded-3xl w-full max-w-2xl max-h-[90dvh] overflow-hidden shadow-2xl flex flex-col">
             <div className="p-5 border-b border-amber-500/30 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2 text-amber-400 font-bold">
                 <PenTool className="w-5 h-5" />

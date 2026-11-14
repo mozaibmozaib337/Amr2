@@ -172,7 +172,7 @@ export const LoginModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
-      <div className="bg-[#0b1429] border border-cyan-800/40 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col text-slate-100 max-h-[90vh]">
+      <div className="bg-[#0b1429] border border-cyan-800/40 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col text-slate-100 max-h-[90dvh]">
         
         {/* Top Header */}
         <div className="p-4 bg-gradient-to-r from-[#0d1a3a] to-[#0b1429] border-b border-cyan-900/40 flex items-center justify-between shrink-0">

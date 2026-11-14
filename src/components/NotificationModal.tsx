@@ -34,7 +34,7 @@ export const NotificationModal: React.FC = () => {
       onClick={handleClose}
     >
       <div
-        className="bg-[#0b1428] border border-cyan-800/50 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col text-slate-100 max-h-[85vh]"
+        className="bg-[#0b1428] border border-cyan-800/50 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col text-slate-100 max-h-[85dvh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -21,6 +21,9 @@ import {
   Medal,
   Trophy,
   Headphones,
+  Bot,
+  ClipboardList,
+  Sliders,
 } from 'lucide-react';
 import { usePlatform, ADMIN_EMAIL } from '../context/PlatformContext';
 import { GradeLevel } from '../types';
@@ -34,8 +37,9 @@ interface StudentSidebarProps {
 export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSelectTab }) => {
   const {
     currentUser,
-    logout,
+    requestLogout,
     setIsLoginModalOpen,
+    setIsAdminPanelOpen,
     lectures,
     hasAccessToLecture,
     activeGrade,
@@ -54,11 +58,6 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
     currentUser?.role === 'admin' ||
     currentUser?.role === 'secretary' ||
     currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-
-  // Render ONLY for Guests (before login) and Students (hide when Admin/Secretary logs in)
-  if (isAdminOrSec) {
-    return null;
-  }
 
   const gradeLabels: Record<GradeLevel, string> = {
     sec1: 'الصف الأول الثانوي',
@@ -98,21 +97,44 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
       ).length
     : 0;
 
-  const sidebarItems = [
-    { id: 'home', label: 'الرئيسية', icon: LayoutDashboard },
-    { id: 'lectures', label: 'الكورسات والمحاضرات', icon: PlaySquare },
-    ...(currentUser
-      ? [{ id: 'my_courses', label: 'كورساتي الحالية', icon: BookOpen, badge: myEnrolledCount }]
-      : []),
-    { id: 'exams', label: 'الامتحانات الإلكترونية', icon: FileCheck2 },
-    { id: 'homework', label: 'الواجبات والشيتات', icon: BookCheck },
-    { id: 'files', label: 'الملفات والمذكرات', icon: FolderOpen },
-    { id: 'top_rankings', label: 'أوائل الشيتات والامتحانات', icon: Medal },
-    { id: 'leaderboard', label: 'لوحة الشرف', icon: Trophy },
-    ...(currentUser ? [{ id: 'student_profile', label: 'حسابي ودرجاتي', icon: UserCircle2 }] : []),
-    { id: 'wallet', label: 'شحن المحفظة وكود السنتر', icon: Wallet },
-    { id: 'support', label: 'الدعم الفني', icon: Headphones },
-  ];
+  type SidebarItem = {
+    id: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: number;
+    isSpecial?: boolean;
+  };
+
+  const sidebarItems: SidebarItem[] = isAdminOrSec
+    ? [
+        { id: 'home', label: 'الرئيسية', icon: LayoutDashboard },
+        { id: 'gemini_ai', label: '🤖 جيمناي الذكي الحقيقي', icon: Bot, isSpecial: true },
+        { id: 'lectures', label: 'المحاضرات والكورسات', icon: PlaySquare },
+        { id: 'files', label: 'الملفات والمذكرات', icon: FolderOpen },
+        { id: 'exams', label: 'الامتحانات الإلكترونية', icon: FileCheck2 },
+        { id: 'homework', label: 'الواجبات والشيتات', icon: BookCheck },
+        { id: 'top_rankings', label: 'أوائل الشيتات والامتحانات', icon: Medal },
+        { id: 'student_data', label: 'بيانات الطالب والتقارير', icon: ClipboardList },
+        { id: 'student_profile', label: 'حسابي', icon: UserCircle2 },
+        { id: 'wallet', label: 'محفظتي وكود الشحن', icon: Wallet },
+        { id: 'leaderboard', label: 'لوحة الشرف', icon: Trophy },
+        { id: 'support', label: 'الدعم الفني', icon: Headphones },
+      ]
+    : [
+        { id: 'home', label: 'الرئيسية', icon: LayoutDashboard },
+        { id: 'lectures', label: 'الكورسات والمحاضرات', icon: PlaySquare },
+        ...(currentUser
+          ? [{ id: 'my_courses', label: 'كورساتي الحالية', icon: BookOpen, badge: myEnrolledCount }]
+          : []),
+        { id: 'exams', label: 'الامتحانات الإلكترونية', icon: FileCheck2 },
+        { id: 'homework', label: 'الواجبات والشيتات', icon: BookCheck },
+        { id: 'files', label: 'الملفات والمذكرات', icon: FolderOpen },
+        { id: 'top_rankings', label: 'أوائل الشيتات والامتحانات', icon: Medal },
+        { id: 'leaderboard', label: 'لوحة الشرف', icon: Trophy },
+        ...(currentUser ? [{ id: 'student_profile', label: 'حسابي', icon: UserCircle2 }] : []),
+        { id: 'wallet', label: 'شحن المحفظة وكود السنتر', icon: Wallet },
+        { id: 'support', label: 'الدعم الفني', icon: Headphones },
+      ];
 
   const handleMobileNavSelect = (tabId: string) => {
     onSelectTab(tabId);
@@ -143,7 +165,9 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs sm:text-sm font-extrabold text-white truncate">الكيمياء مع مستر عمرو</p>
-                  <p className="text-[11px] font-semibold text-cyan-400 truncate">المنصة التعليمية الرسمية</p>
+                  <p className="text-[11px] font-semibold text-cyan-400 truncate">
+                    {isAdminOrSec ? 'لوحة الإدارة والمعلم' : 'المنصة التعليمية الرسمية'}
+                  </p>
                 </div>
               </div>
             )}
@@ -171,7 +195,7 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
             )}
           </div>
 
-          {/* User / Guest Card + Grade Indicator/Filter */}
+          {/* User / Admin / Guest Card */}
           {currentUser ? (
             !collapsed ? (
               <div className="m-3 p-3.5 rounded-2xl bg-[#060b18] border border-cyan-900/40 space-y-2.5">
@@ -183,27 +207,74 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
                     <p className="text-sm font-bold text-white truncate">{currentUser.name}</p>
                     <p className="text-xs text-cyan-400 truncate flex items-center gap-1">
                       <GraduationCap className="w-3.5 h-3.5 shrink-0" />
-                      <span>{gradeLabels[currentUser.grade]}</span>
+                      <span>
+                        {isAdminOrSec
+                          ? currentUser.role === 'secretary'
+                            ? 'سكرتارية المنصة'
+                            : 'المشرف العام'
+                          : gradeLabels[currentUser.grade]}
+                      </span>
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => (mobileMode ? handleMobileNavSelect('wallet') : onSelectTab('wallet'))}
-                  className="w-full min-h-[44px] flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs hover:text-cyan-300 transition-colors cursor-pointer"
-                >
-                  <span className="text-slate-400">رصيد المحفظة:</span>
-                  <span className="font-bold text-emerald-400 tabular-nums">{currentUser.walletBalance} ج.م</span>
-                </button>
+
+                {isAdminOrSec ? (
+                  <>
+                    <div className="flex items-center min-h-[40px] bg-[#091224] border border-slate-800 rounded-xl px-2 py-1 text-xs">
+                      <GraduationCap className="w-4 h-4 text-cyan-400 me-1.5 shrink-0" />
+                      <select
+                        value={activeGrade}
+                        onChange={(e) => setActiveGrade(e.target.value as GradeLevel | 'all')}
+                        aria-label="تصفية الصف الدراسي"
+                        className="w-full bg-transparent text-slate-200 font-semibold focus:outline-none cursor-pointer"
+                      >
+                        <option value="all" className="bg-[#0b1329] text-white">جميع الصفوف الدراسية</option>
+                        <option value="sec3" className="bg-[#0b1329] text-white">الصف الثالث الثانوي</option>
+                        <option value="sec2" className="bg-[#0b1329] text-white">الصف الثاني الثانوي</option>
+                        <option value="sec1" className="bg-[#0b1329] text-white">الصف الأول الثانوي</option>
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAdminPanelOpen(true);
+                        if (mobileMode) setIsMobileDrawerOpen(false);
+                      }}
+                      className="w-full min-h-[44px] px-3 py-2 rounded-xl bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                    >
+                      <Sliders className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>لوحة التحكم والإدارة +</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => (mobileMode ? handleMobileNavSelect('wallet') : onSelectTab('wallet'))}
+                    className="w-full min-h-[44px] flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs hover:text-cyan-300 transition-colors cursor-pointer"
+                  >
+                    <span className="text-slate-400">رصيد المحفظة:</span>
+                    <span className="font-bold text-emerald-400 tabular-nums">{currentUser.walletBalance} ج.م</span>
+                  </button>
+                )}
               </div>
             ) : (
-              <div className="my-2.5 flex justify-center">
+              <div className="my-2.5 flex flex-col items-center gap-2">
                 <div
-                  title={`${currentUser.name} (${currentUser.walletBalance} ج.م)`}
+                  title={`${currentUser.name}`}
                   className="w-10 h-10 rounded-xl bg-cyan-600/20 border border-cyan-500/40 text-cyan-300 flex items-center justify-center font-extrabold text-sm"
                 >
                   {currentUser.name.trim().charAt(0)}
                 </div>
+                {isAdminOrSec && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAdminPanelOpen(true)}
+                    title="لوحة التحكم والإدارة"
+                    className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 flex items-center justify-center cursor-pointer"
+                  >
+                    <Sliders className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             )
           ) : !collapsed ? (
@@ -285,7 +356,7 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
           </div>
 
           {/* Navigation Links */}
-          <nav className="px-2.5 py-1 space-y-1 bg-transparent border-0" aria-label="تنقل الطالب">
+          <nav className="px-2.5 py-1 space-y-1 bg-transparent border-0" aria-label="القائمة الجانبية">
             {sidebarItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -299,12 +370,20 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
                     collapsed ? 'justify-center min-h-0' : 'justify-between'
                   } ${
                     isActive
-                      ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/25'
+                      ? item.isSpecial
+                        ? 'bg-amber-500/25 text-amber-200 border border-amber-500/50 shadow-md'
+                        : 'bg-cyan-600 text-white shadow-md shadow-cyan-600/25'
+                      : item.isSpecial
+                      ? 'text-amber-300 hover:bg-amber-500/15 border border-amber-500/30'
                       : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-cyan-400'}`} />
+                    <Icon
+                      className={`w-4 h-4 shrink-0 ${
+                        isActive ? 'text-white' : item.isSpecial ? 'text-amber-400' : 'text-cyan-400'
+                      }`}
+                    />
                     {!collapsed && <span className="truncate whitespace-nowrap">{item.label}</span>}
                   </div>
 
@@ -331,16 +410,16 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
 
           {currentUser ? (
             <>
-              {!collapsed && (
+              {!collapsed && currentUser.studentCode && (
                 <div className="px-3 py-2 rounded-xl bg-cyan-950/30 border border-cyan-900/30 flex items-center gap-2 text-xs text-cyan-300">
                   <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                  <span className="truncate whitespace-nowrap">كودك: {currentUser.studentCode || '---'}</span>
+                  <span className="truncate whitespace-nowrap">كودك: {currentUser.studentCode}</span>
                 </div>
               )}
               <button
                 type="button"
                 onClick={() => {
-                  logout();
+                  requestLogout();
                   if (mobileMode) setIsMobileDrawerOpen(false);
                 }}
                 title="تسجيل الخروج"
@@ -377,15 +456,15 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
     <>
       {/* Desktop / Tablet Docked Collapsible Sidebar */}
       <aside
-        aria-label="قائمة الطالب الجانبية"
-        className={`hidden md:flex shrink-0 sticky top-0 self-start h-screen bg-[#091224] border-l border-cyan-900/35 flex-col justify-between transition-all duration-200 z-30 ${
+        aria-label="القائمة الجانبية"
+        className={`hidden md:flex shrink-0 sticky top-[73px] self-start h-[calc(100dvh-73px)] bg-[#091224] border-l border-cyan-900/35 flex-col justify-between transition-all duration-200 z-30 ${
           isCollapsed ? 'w-[78px]' : 'w-64'
         }`}
       >
         {renderSidebarBody(false)}
       </aside>
 
-      {/* Mobile Floating Square Arrow Toggle Button (upper corner right below MobileHeader) */}
+      {/* Mobile Floating Square Arrow Toggle Button */}
       {!isMobileDrawerOpen && (
         <button
           type="button"
@@ -409,7 +488,7 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
         >
           <aside
             onClick={(e) => e.stopPropagation()}
-            className="fixed top-0 right-0 bottom-0 w-[84vw] max-w-[320px] bg-[#091224] border-l border-cyan-800/50 shadow-2xl flex flex-col justify-between overflow-y-auto"
+            className="fixed top-0 right-0 bottom-0 h-dvh w-[84vw] max-w-[320px] bg-[#091224] border-l border-cyan-800/50 shadow-2xl flex flex-col justify-between overflow-y-auto"
           >
             {renderSidebarBody(true)}
           </aside>

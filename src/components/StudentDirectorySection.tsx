@@ -893,7 +893,7 @@ export const StudentDirectorySection: React.FC<StudentDirectorySectionProps> = (
           onClick={() => setSelectedStudentId(null)}
         >
           <div
-            className="bg-[#0b1328] border border-cyan-500/40 rounded-3xl w-full max-w-5xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col text-slate-100"
+            className="bg-[#0b1328] border border-cyan-500/40 rounded-3xl w-full max-w-5xl max-h-[92dvh] overflow-hidden shadow-2xl flex flex-col text-slate-100"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -1521,7 +1521,7 @@ export const StudentDirectorySection: React.FC<StudentDirectorySectionProps> = (
               setEditingStudent(null);
               showTempFeedback('success', 'تم تعديل وحفظ بيانات الطالب بنجاح!');
             }}
-            className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4"
+            className="bg-[#0b1329] border border-cyan-800/80 rounded-2xl w-full max-w-2xl max-h-[92dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4"
           >
             <div className="flex items-center justify-between pb-3 border-b border-cyan-900/40">
               <div className="flex items-center gap-2">

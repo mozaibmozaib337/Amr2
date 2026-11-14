@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { PlatformProvider, usePlatform, ADMIN_EMAIL } from './context/PlatformContext';
 import { Header } from './components/Header';
-import { Navigation } from './components/Navigation';
 import { StudentSidebar } from './components/StudentSidebar';
 import { HomeDashboard } from './components/HomeDashboard';
 import { LecturesSection } from './components/LecturesSection';
@@ -13,6 +12,7 @@ import { LeaderboardSection } from './components/LeaderboardSection';
 import { SupportSection } from './components/SupportSection';
 import { StudentProfileSection } from './components/StudentProfileSection';
 import { LoginModal } from './components/LoginModal';
+import { LogoutConfirmModal } from './components/LogoutConfirmModal';
 import { AdminPanelModal } from './components/AdminPanelModal';
 import { CourseAccessModal } from './components/CourseAccessModal';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
@@ -45,21 +45,16 @@ function MainApp() {
   };
 
   return (
-    <div className="min-h-screen w-full overflow-x-clip flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
+    <div className="min-h-dvh w-full overflow-x-clip flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
       {/* Compact Single-Row Mobile Header (Visible on phones < 768px) */}
       <MobileHeader activeTab={activeTab} setActiveTab={handleSelectTab} />
 
-      {/* Top Desktop Header & Comprehensive Navigation: Visible ONLY for Teacher (Admin) and Secretary */}
-      {isAdminOrSec && (
-        <>
-          <div className="hidden md:block">
-            <Header activeTab={activeTab} setActiveTab={handleSelectTab} />
-          </div>
-          <Navigation activeTab={activeTab} setActiveTab={handleSelectTab} />
-        </>
-      )}
+      {/* Top Desktop Header: Visible on Desktop/Tablet for Students, Guests, Teacher, and Secretary */}
+      <div className="hidden md:block">
+        <Header activeTab={activeTab} setActiveTab={handleSelectTab} />
+      </div>
 
-      {/* Workspace Shell: Collapsible Right Sidebar (Desktop) + Slide-over Drawer (Mobile) + Main Content */}
+      {/* Workspace Shell: Collapsible Right Sidebar (All Roles) + Main Content */}
       <div className="flex-1 flex w-full max-w-[1440px] mx-auto">
         <StudentSidebar activeTab={activeTab} onSelectTab={handleSelectTab} />
 
@@ -113,6 +108,7 @@ function MainApp() {
 
       {/* Modals & Embedded Viewers */}
       <LoginModal />
+      <LogoutConfirmModal />
       <NotificationModal />
       <AdminPanelModal />
       <CourseAccessModal />
