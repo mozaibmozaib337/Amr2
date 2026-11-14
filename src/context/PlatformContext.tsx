@@ -187,6 +187,8 @@ interface PlatformContextType {
   setIsAdminPanelOpen: (open: boolean) => void;
   isLoginModalOpen: boolean;
   setIsLoginModalOpen: (open: boolean) => void;
+  currentPath: string;
+  navigate: (path: string) => void;
   selectedCourseForDetails: Lecture | null;
   setSelectedCourseForDetails: (lec: Lecture | null) => void;
   // Strict Case-Sensitive Authentication & Student Directory
@@ -292,7 +294,13 @@ interface PlatformContextType {
   addBatchAuthorizedStudents: (students: { studentName: string; phone: string; studentCode: string; lectureId: string }[]) => number;
   // Broadcast Notifications & Global Messaging
   broadcastNotifications: BroadcastNotification[];
-  sendBroadcastNotification: (title: string, message: string, targetGrade?: GradeLevel | 'all', priority?: 'normal' | 'urgent') => void;
+  sendBroadcastNotification: (
+    title: string,
+    message: string,
+    targetGrade?: GradeLevel | 'all',
+    priority?: 'normal' | 'urgent',
+    audioOptions?: { audioUrl?: string; audioDurationSeconds?: number }
+  ) => void;
   deleteBroadcastNotification: (id: string) => void;
   unreadBroadcastCount: number;
   markBroadcastsAsRead: () => void;
@@ -425,8 +433,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [secretaries, setSecretaries] = useState<Secretary[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(DEFAULT_PAYMENT_METHODS);
 
-  const [activeVideo, setActiveVideo] = useState<Lecture | { title: string; videoUrl: string } | null>(null);
-  const [activeDocument, setActiveDocument] = useState<{
+  const [activeVideo, setActiveVideoRaw] = useState<Lecture | { title: string; videoUrl: string } | null>(null);
+  const [activeDocument, setActiveDocumentRaw] = useState<{
     title: string;
     fileUrl: string;
     fileName?: string;
@@ -434,11 +442,75 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   } | null>(null);
 
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [currentPath, setCurrentPath] = useState<string>(() =>
+    typeof window !== 'undefined' ? window.location.pathname || '/' : '/'
+  );
+  const [isLoginModalOpenState, setIsLoginModalOpenState] = useState<boolean>(() =>
+    typeof window !== 'undefined'
+      ? window.location.pathname === '/login' || window.location.pathname === '/register'
+      : false
+  );
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [selectedCourseForDetails, setSelectedCourseForDetails] = useState<Lecture | null>(null);
 
+  const navigate = (path: string) => {
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    if (typeof window !== 'undefined' && window.location.pathname !== normalized) {
+      window.history.pushState({}, '', normalized);
+    }
+    setCurrentPath(normalized);
+    const isAuthPath = normalized === '/login' || normalized === '/register';
+    setIsLoginModalOpenState(isAuthPath);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      const nextPath = window.location.pathname || '/';
+      setCurrentPath(nextPath);
+      setIsLoginModalOpenState(nextPath === '/login' || nextPath === '/register');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const setIsLoginModalOpen = (open: boolean) => {
+    if (open) {
+      navigate('/login');
+    } else {
+      navigate('/');
+    }
+  };
+
+  const isLoginModalOpen = isLoginModalOpenState;
+
   const [broadcastNotifications, setBroadcastNotifications] = useState<BroadcastNotification[]>(INITIAL_BROADCAST_NOTIFICATIONS);
+
+  const setActiveVideo = (video: Lecture | { title: string; videoUrl: string } | null) => {
+    if (video && !currentUser) {
+      setIsLoginModalOpen(true);
+      return;
+    }
+    setActiveVideoRaw(video);
+  };
+
+  const setActiveDocument = (
+    doc: {
+      title: string;
+      fileUrl: string;
+      fileName?: string;
+      fileType?: string;
+    } | null
+  ) => {
+    if (doc && !currentUser) {
+      setIsLoginModalOpen(true);
+      return;
+    }
+    setActiveDocumentRaw(doc);
+  };
 
   const [readNotifIds, setReadNotifIds] = useState<string[]>(() => {
     try {
@@ -593,7 +665,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const mergedAccounts = Array.from(accMap.values());
         setRegisteredAccounts(mergedAccounts);
 
-        // Refresh active logged-in student profile against cloud so walletBalance/grade/role stay synced across phones
+        // Refresh active logged-in student profile against cloud so walletBalance/grade/role/enrollments stay synced across phones
         setCurrentUser((prevUser) => {
           if (!prevUser || prevUser.role !== 'student') return prevUser;
           const liveAcc = mergedAccounts.find(
@@ -603,6 +675,12 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               (a.phone && prevUser.phone && a.phone.replace(/\D/g, '') === prevUser.phone.replace(/\D/g, ''))
           );
           if (!liveAcc) return prevUser;
+          const mergedEnrolled = Array.from(
+            new Set([
+              ...(Array.isArray(prevUser.enrolledLectureIds) ? prevUser.enrolledLectureIds : []),
+              ...(Array.isArray(liveAcc.enrolledLectureIds) ? liveAcc.enrolledLectureIds : []),
+            ])
+          );
           return {
             ...prevUser,
             id: liveAcc.id,
@@ -614,6 +692,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             grade: liveAcc.grade || prevUser.grade,
             governorate: liveAcc.governorate || prevUser.governorate,
             walletBalance: liveAcc.walletBalance ?? prevUser.walletBalance,
+            enrolledLectureIds: mergedEnrolled,
           };
         });
       } catch (err) {
@@ -833,17 +912,22 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     title: string,
     message: string,
     targetGrade: GradeLevel | 'all' = 'all',
-    priority: 'normal' | 'urgent' = 'normal'
+    priority: 'normal' | 'urgent' = 'normal',
+    audioOptions?: { audioUrl?: string; audioDurationSeconds?: number }
   ) => {
     const newNotif: BroadcastNotification = {
       id: `notif_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      title,
-      message,
+      title: title.trim() || (audioOptions?.audioUrl ? 'رسالة صوتية من المعلم' : 'تنبيه جديد'),
+      message: message.trim(),
       senderName: currentUser?.name || 'مستر عمرو السيد',
       senderRole: currentUser?.role === 'secretary' ? 'secretary' : 'admin',
       targetGrade,
       createdAt: new Date().toISOString(),
       priority,
+      ...(audioOptions?.audioUrl ? { audioUrl: audioOptions.audioUrl } : {}),
+      ...(audioOptions?.audioDurationSeconds !== undefined
+        ? { audioDurationSeconds: audioOptions.audioDurationSeconds }
+        : {}),
     };
     setBroadcastNotifications((prev) => [newNotif, ...prev]);
     saveDocument('broadcast_notifications', newNotif.id, newNotif);
@@ -1003,6 +1087,27 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             setExamSubmissions((prev) => mergeByKey(prev, items));
           }
         }, INITIAL_EXAM_SUBMISSIONS)
+      );
+
+      unsubscribes.push(
+        subscribeToCollection<StudentAccessState & { studentId?: string; id?: string }>('student_access', (items) => {
+          if (items.length > 0) {
+            setStudentAccessMap((prev) => {
+              const next = { ...prev };
+              items.forEach((row) => {
+                const sid = row.studentId || row.id;
+                if (!sid) return;
+                const cur = next[sid] || { lectures: {}, exams: {}, homeworks: {} };
+                next[sid] = {
+                  lectures: { ...(cur.lectures || {}), ...(row.lectures || {}) },
+                  exams: { ...(cur.exams || {}), ...(row.exams || {}) },
+                  homeworks: { ...(cur.homeworks || {}), ...(row.homeworks || {}) },
+                };
+              });
+              return next;
+            });
+          }
+        })
       );
     } catch (e) {
       console.warn('[Firestore] Error attaching listeners:', e);
@@ -1193,7 +1298,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       grade: updatedAccount.grade,
       role: updatedAccount.role,
       walletBalance: updatedAccount.walletBalance,
-      enrolledLectureIds: [],
+      enrolledLectureIds: Array.isArray(updatedAccount.enrolledLectureIds) ? updatedAccount.enrolledLectureIds : [],
     };
     setCurrentUser(studentProfile);
 
@@ -1273,6 +1378,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       governorate: data.governorate.trim() || 'القاهرة',
       role: 'student',
       walletBalance: 0,
+      enrolledLectureIds: [],
       registeredAt: new Date().toISOString().split('T')[0],
     };
 
@@ -1296,6 +1402,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       ...prev,
       [newAcc.id]: initialAccess,
     }));
+    saveDocument('student_access', newAcc.id, { id: newAcc.id, studentId: newAcc.id, ...initialAccess });
     patchServerCollection('studentAccessMap', 'upsert', { id: newAcc.id, item: initialAccess });
 
     // 3. Activate student session immediately with exact cloud ID & attributes
@@ -1361,7 +1468,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           grade: matched.grade,
           role: matched.role,
           walletBalance: matched.walletBalance,
-          enrolledLectureIds: [],
+          enrolledLectureIds: Array.isArray(matched.enrolledLectureIds) ? matched.enrolledLectureIds : [],
         }
       : {
           id: generateUuid(),
@@ -1387,15 +1494,17 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const entryState = { lectures: { [lectureId]: { entered: true, date: nowStr } } };
     setStudentAccessMap((prev) => {
       const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
+      const nextAccess: StudentAccessState = {
+        ...current,
+        lectures: {
+          ...current.lectures,
+          [lectureId]: { entered: true, date: nowStr },
+        },
+      };
+      saveDocument('student_access', currentUser.id, { id: currentUser.id, studentId: currentUser.id, ...nextAccess });
       return {
         ...prev,
-        [currentUser.id]: {
-          ...current,
-          lectures: {
-            ...current.lectures,
-            [lectureId]: { entered: true, date: nowStr },
-          },
-        },
+        [currentUser.id]: nextAccess,
       };
     });
     patchServerCollection('studentAccessMap', 'upsert', { id: currentUser.id, item: entryState });
@@ -1433,19 +1542,23 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         completed: true,
         completedAt: dateFormatted,
       };
+      const nextAccess: StudentAccessState = {
+        ...current,
+        lectures: {
+          ...current.lectures,
+          [lectureId]: updatedLec,
+        },
+      };
       patchServerCollection('studentAccessMap', 'upsert', {
         id: studentId,
         item: { lectures: { [lectureId]: updatedLec } },
       });
+      if (currentUser) {
+        saveDocument('student_access', studentId, { id: studentId, studentId, ...nextAccess });
+      }
       return {
         ...prev,
-        [studentId]: {
-          ...current,
-          lectures: {
-            ...current.lectures,
-            [lectureId]: updatedLec,
-          },
-        },
+        [studentId]: nextAccess,
       };
     });
 
@@ -1565,35 +1678,39 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
         if (assessmentType === 'sheet' || assessmentType === 'homework') {
           const hwUpdate = { [examId]: { solved: true, score, maxScore, percentage, date: nowStr } };
+          const nextAccess: StudentAccessState = {
+            ...current,
+            homeworks: {
+              ...current.homeworks,
+              ...hwUpdate,
+            },
+          };
+          saveDocument('student_access', currentUser.id, { id: currentUser.id, studentId: currentUser.id, ...nextAccess });
           patchServerCollection('studentAccessMap', 'upsert', {
             id: currentUser.id,
             item: { homeworks: hwUpdate },
           });
           return {
             ...prev,
-            [currentUser.id]: {
-              ...current,
-              homeworks: {
-                ...current.homeworks,
-                ...hwUpdate,
-              },
-            },
+            [currentUser.id]: nextAccess,
           };
         }
         const exUpdate = { [examId]: { taken: true, score, maxScore, percentage, date: nowStr } };
+        const nextAccess: StudentAccessState = {
+          ...current,
+          exams: {
+            ...current.exams,
+            ...exUpdate,
+          },
+        };
+        saveDocument('student_access', currentUser.id, { id: currentUser.id, studentId: currentUser.id, ...nextAccess });
         patchServerCollection('studentAccessMap', 'upsert', {
           id: currentUser.id,
           item: { exams: exUpdate },
         });
         return {
           ...prev,
-          [currentUser.id]: {
-            ...current,
-            exams: {
-              ...current.exams,
-              ...exUpdate,
-            },
-          },
+          [currentUser.id]: nextAccess,
         };
       });
     }
@@ -1666,19 +1783,21 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               date: nowStr,
             },
           };
+          const nextAccess: StudentAccessState = {
+            ...current,
+            homeworks: {
+              ...current.homeworks,
+              ...hwUpdate,
+            },
+          };
+          saveDocument('student_access', studentId, { id: studentId, studentId, ...nextAccess });
           patchServerCollection('studentAccessMap', 'upsert', {
             id: studentId,
             item: { homeworks: hwUpdate },
           });
           return {
             ...prev,
-            [studentId]: {
-              ...current,
-              homeworks: {
-                ...current.homeworks,
-                ...hwUpdate,
-              },
-            },
+            [studentId]: nextAccess,
           };
         }
         const exUpdate = {
@@ -1690,19 +1809,21 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             date: nowStr,
           },
         };
+        const nextAccess: StudentAccessState = {
+          ...current,
+          exams: {
+            ...current.exams,
+            ...exUpdate,
+          },
+        };
+        saveDocument('student_access', studentId, { id: studentId, studentId, ...nextAccess });
         patchServerCollection('studentAccessMap', 'upsert', {
           id: studentId,
           item: { exams: exUpdate },
         });
         return {
           ...prev,
-          [studentId]: {
-            ...current,
-            exams: {
-              ...current.exams,
-              ...exUpdate,
-            },
-          },
+          [studentId]: nextAccess,
         };
       });
     }
@@ -1733,15 +1854,17 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setStudentAccessMap((prev) => {
       const current = prev[currentUser.id] || { lectures: {}, exams: {}, homeworks: {} };
+      const nextAccess: StudentAccessState = {
+        ...current,
+        homeworks: {
+          ...current.homeworks,
+          ...hwUpdate,
+        },
+      };
+      saveDocument('student_access', currentUser.id, { id: currentUser.id, studentId: currentUser.id, ...nextAccess });
       return {
         ...prev,
-        [currentUser.id]: {
-          ...current,
-          homeworks: {
-            ...current.homeworks,
-            ...hwUpdate,
-          },
-        },
+        [currentUser.id]: nextAccess,
       };
     });
     patchServerCollection('studentAccessMap', 'upsert', {
@@ -1923,6 +2046,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const logout = () => {
     setCurrentUser(null);
+    setActiveVideoRaw(null);
+    setActiveDocumentRaw(null);
+    setSelectedCourseForDetails(null);
     setIsAdminPanelOpen(false);
     setIsLogoutConfirmOpen(false);
   };
@@ -2241,11 +2367,17 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     saveDocument('authorized_students', newAuth.id, newAuth);
     patchServerCollection('authorizedStudents', 'upsert', { item: newAuth });
 
+    const matchedAcc = registeredAccounts.find((a) => a.phone === cleanPhone);
+    if (matchedAcc) {
+      const nextIds = Array.from(new Set([...(matchedAcc.enrolledLectureIds || []), lectureId]));
+      updateRegisteredStudent(matchedAcc.id, { studentCode: cleanCode, enrolledLectureIds: nextIds });
+    }
+
     if (currentUser && currentUser.phone === cleanPhone) {
       setCurrentUser({
         ...currentUser,
         studentCode: cleanCode,
-        enrolledLectureIds: Array.from(new Set([...currentUser.enrolledLectureIds, lectureId])),
+        enrolledLectureIds: Array.from(new Set([...(currentUser.enrolledLectureIds || []), lectureId])),
       });
     }
   };
@@ -2256,32 +2388,42 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const target = authorizedStudents.find((a) => a.id === id);
     setAuthorizedStudents((prev) => prev.filter((item) => item.id !== id));
 
-    if (target && currentUser && currentUser.phone === target.phone) {
-      setCurrentUser({
-        ...currentUser,
-        enrolledLectureIds: currentUser.enrolledLectureIds.filter(
-          (lid) => lid !== target.lectureId && lid !== 'all'
-        ),
-      });
+    if (target) {
+      const matchedAcc = registeredAccounts.find((a) => a.phone === target.phone);
+      if (matchedAcc && Array.isArray(matchedAcc.enrolledLectureIds)) {
+        updateRegisteredStudent(matchedAcc.id, {
+          enrolledLectureIds: matchedAcc.enrolledLectureIds.filter(
+            (lid) => lid !== target.lectureId && lid !== 'all'
+          ),
+        });
+      }
+      if (currentUser && currentUser.phone === target.phone) {
+        setCurrentUser({
+          ...currentUser,
+          enrolledLectureIds: (currentUser.enrolledLectureIds || []).filter(
+            (lid) => lid !== target.lectureId && lid !== 'all'
+          ),
+        });
+      }
     }
   };
 
-  // Access check: Free courses are open to all; Authorized students (phone + code) enter free; others must pay
+  // Access check: MUST be logged in first; then free courses, Admin/Secretary, purchased, whitelisted, or approved receipts enter
   const hasAccessToLecture = (lectureId: string): boolean => {
-    // 1. Free courses are completely open without subscription
+    if (!currentUser) return false;
+
+    // 1. Admin & Secretary access
+    if (currentUser.role === 'admin' || currentUser.role === 'secretary' || currentUser.email === ADMIN_EMAIL) {
+      return true;
+    }
+
+    // 2. Free courses are unlocked for logged-in users
     const lecture = lectures.find((l) => l.id === lectureId);
     if (lecture?.isFree || (lecture && lecture.price === 0)) {
       return true;
     }
 
-    if (!currentUser) return false;
-
-    // 2. Admin & Secretary access
-    if (currentUser.role === 'admin' || currentUser.role === 'secretary' || currentUser.email === ADMIN_EMAIL) {
-      return true;
-    }
-
-    // 3. User purchased via wallet balance
+    // 3. User purchased or unlocked via code / approval
     if (currentUser.enrolledLectureIds?.includes(lectureId) || currentUser.enrolledLectureIds?.includes('all')) {
       return true;
     }
@@ -2408,6 +2550,36 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setTransactions((prev) => [tx, ...prev]);
         patchServerCollection('transactions', 'upsert', { item: tx });
       }
+    } else if (targetReq && targetReq.lectureId && targetReq.lectureId !== 'wallet_topup') {
+      const matchedStudent = registeredAccounts.find(
+        (acc) =>
+          acc.id === targetReq.studentId ||
+          ensureUuid(acc.id) === ensureUuid(targetReq.studentId) ||
+          (acc.phone && acc.phone === targetReq.studentPhone)
+      );
+      if (matchedStudent) {
+        const nextEnrolled = Array.from(
+          new Set([...(matchedStudent.enrolledLectureIds || []), targetReq.lectureId])
+        );
+        updateRegisteredStudent(matchedStudent.id, { enrolledLectureIds: nextEnrolled });
+      }
+      if (
+        currentUser &&
+        (currentUser.id === targetReq.studentId ||
+          ensureUuid(currentUser.id) === ensureUuid(targetReq.studentId) ||
+          (targetReq.studentPhone && currentUser.phone === targetReq.studentPhone))
+      ) {
+        setCurrentUser((prev) =>
+          prev
+            ? {
+                ...prev,
+                enrolledLectureIds: Array.from(
+                  new Set([...(prev.enrolledLectureIds || []), targetReq.lectureId])
+                ),
+              }
+            : prev
+        );
+      }
     }
   };
 
@@ -2467,14 +2639,17 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     const updatedBalance = currentUser.walletBalance - price;
-    const updatedEnrolled = Array.from(new Set([...currentUser.enrolledLectureIds, lectureId]));
+    const updatedEnrolled = Array.from(new Set([...(currentUser.enrolledLectureIds || []), lectureId]));
 
     setCurrentUser({
       ...currentUser,
       walletBalance: updatedBalance,
       enrolledLectureIds: updatedEnrolled,
     });
-    updateRegisteredStudent(currentUser.id, { walletBalance: updatedBalance });
+    updateRegisteredStudent(currentUser.id, {
+      walletBalance: updatedBalance,
+      enrolledLectureIds: updatedEnrolled,
+    });
 
     const tx: WalletTransaction = {
       id: 'tx_' + Date.now(),
@@ -2507,20 +2682,23 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     if (matchedAuth) {
       if (currentUser) {
+        const nextEnrolled = Array.from(new Set([...(currentUser.enrolledLectureIds || []), lectureId]));
         setCurrentUser({
           ...currentUser,
           phone: cleanPhone,
           studentCode: cleanCode,
-          enrolledLectureIds: Array.from(new Set([...currentUser.enrolledLectureIds, lectureId])),
+          enrolledLectureIds: nextEnrolled,
+        });
+        updateRegisteredStudent(currentUser.id, {
+          studentCode: cleanCode,
+          enrolledLectureIds: nextEnrolled,
         });
       } else {
-        login(
-          `${cleanPhone}@platform.student`,
-          matchedAuth.studentName,
-          cleanPhone,
-          'sec3',
-          cleanCode
-        );
+        setIsLoginModalOpen(true);
+        return {
+          success: false,
+          message: 'يرجى تسجيل الدخول بحسابك أولاً لتفعيل صلاحية دخول الكورس.',
+        };
       }
       return {
         success: true,
@@ -2657,25 +2835,28 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     patchServerCollection('rechargeCodes', 'update', { id: cleanCode, keyField: 'code', item: codeUpdate });
 
     let courseUnlockedNotice = '';
-    if (found.courseId && currentUser) {
-      const updatedEnrolled = Array.from(new Set([...currentUser.enrolledLectureIds, found.courseId]));
-      setCurrentUser({
-        ...currentUser,
-        enrolledLectureIds: updatedEnrolled,
-      });
-      courseUnlockedNotice = found.courseTitle ? ` لكورس: (${found.courseTitle})` : ' للكورس المحدد';
-    }
+    if (currentUser) {
+      const nextEnrolled = found.courseId
+        ? Array.from(new Set([...(currentUser.enrolledLectureIds || []), found.courseId]))
+        : currentUser.enrolledLectureIds || [];
+      const nextBalance =
+        found.value > 0 ? currentUser.walletBalance + found.value : currentUser.walletBalance;
 
-    if (currentUser && found.value > 0) {
-      const updatedBalance = currentUser.walletBalance + found.value;
-      setCurrentUser({
-        ...currentUser,
-        walletBalance: updatedBalance,
-        ...(found.courseId
-          ? { enrolledLectureIds: Array.from(new Set([...currentUser.enrolledLectureIds, found.courseId])) }
-          : {}),
-      });
-      updateRegisteredStudent(currentUser.id, { walletBalance: updatedBalance });
+      if (found.courseId) {
+        courseUnlockedNotice = found.courseTitle ? ` لكورس: (${found.courseTitle})` : ' للكورس المحدد';
+      }
+
+      if (found.courseId || found.value > 0) {
+        setCurrentUser({
+          ...currentUser,
+          walletBalance: nextBalance,
+          enrolledLectureIds: nextEnrolled,
+        });
+        updateRegisteredStudent(currentUser.id, {
+          walletBalance: nextBalance,
+          enrolledLectureIds: nextEnrolled,
+        });
+      }
     }
 
     const tx: WalletTransaction = {
@@ -2761,6 +2942,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setIsAdminPanelOpen,
         isLoginModalOpen,
         setIsLoginModalOpen,
+        currentPath,
+        navigate,
         selectedCourseForDetails,
         setSelectedCourseForDetails,
         registeredAccounts,

@@ -10,6 +10,8 @@ import {
   Sparkles,
   Inbox,
   AlertCircle,
+  Volume2,
+  Mic,
 } from 'lucide-react';
 
 export const NotificationModal: React.FC = () => {
@@ -101,7 +103,7 @@ export const NotificationModal: React.FC = () => {
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2">
                       <span className="p-1.5 rounded-lg bg-cyan-950 text-cyan-400 border border-cyan-800/50">
-                        <Megaphone className="w-4 h-4" />
+                        {notif.audioUrl ? <Mic className="w-4 h-4" /> : <Megaphone className="w-4 h-4" />}
                       </span>
                       <h4 className="font-bold text-sm text-white">{notif.title}</h4>
                     </div>
@@ -114,9 +116,30 @@ export const NotificationModal: React.FC = () => {
                     )}
                   </div>
 
-                  <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-black/20 p-3 rounded-lg border border-slate-800/60">
-                    {notif.message}
-                  </p>
+                  {notif.message && (
+                    <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-black/20 p-3 rounded-lg border border-slate-800/60">
+                      {notif.message}
+                    </p>
+                  )}
+
+                  {notif.audioUrl && (
+                    <div className="mt-2.5 p-3 rounded-xl bg-[#050a18] border border-cyan-700/40 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-cyan-300">
+                        <span className="flex items-center gap-1.5">
+                          <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>رسالة صوتية من المعلم</span>
+                        </span>
+                        {notif.audioDurationSeconds ? (
+                          <span className="font-mono text-[10px] text-cyan-200 bg-cyan-950 px-2 py-0.5 rounded">
+                            {`${String(Math.floor(notif.audioDurationSeconds / 60)).padStart(2, '0')}:${String(
+                              Math.floor(notif.audioDurationSeconds % 60)
+                            ).padStart(2, '0')}`}
+                          </span>
+                        ) : null}
+                      </div>
+                      <audio controls preload="metadata" src={notif.audioUrl} className="w-full h-10" />
+                    </div>
+                  )}
 
                   <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800/60">
                     <div className="flex items-center gap-1.5 text-cyan-300 font-semibold">

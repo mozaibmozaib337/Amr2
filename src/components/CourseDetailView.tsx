@@ -18,6 +18,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   Sliders,
+  Edit3,
+  Save,
+  LogIn,
 } from 'lucide-react';
 import {
   CourseLesson,
@@ -54,6 +57,7 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
     homeworks,
     setIsLoginModalOpen,
     setIsAdminPanelOpen,
+    updateLecture,
   } = usePlatform();
 
   const lessons = getCourseLessons(course);
@@ -64,11 +68,13 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   });
   const [activeAssessment, setActiveAssessment] = useState<AssessmentConfig | null>(null);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [draftDescription, setDraftDescription] = useState(course.description || '');
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'secretary';
   const isFreeCourse = Boolean(course.isFree || course.price === 0);
   const isUnlocked = hasAccessToLecture(course.id);
-  const canAccessContent = isAdmin || isFreeCourse || isUnlocked;
+  const canAccessContent = isAdmin || (Boolean(currentUser) && (isFreeCourse || isUnlocked));
 
   const gradeLabels: Record<GradeLevel, string> = {
     sec1: 'الصف الأول الثانوي',
@@ -125,6 +131,10 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   };
 
   const handleOpenSubSection = (lesson: CourseLesson, sub: LessonSubSection) => {
+    if (!currentUser) {
+      setIsLoginModalOpen(true);
+      return;
+    }
     if (!canAccessContent) {
       setSelectedCourseForDetails(course);
       return;
@@ -362,9 +372,61 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
               {course.title}
             </h1>
 
-            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              {course.description || 'كورس متكامل يشمل شرح المحاضرات بالتفصيل، تسليم الواجبات، والامتحانات التفاعلية لمتابعة مستواك خطوة بخطوة.'}
-            </p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs font-bold text-cyan-400">وصف الكورس:</span>
+                {isAdmin && !isEditingDescription && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraftDescription(course.description || '');
+                      setIsEditingDescription(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-950/60 border border-cyan-700/50 text-cyan-300 hover:bg-cyan-600 hover:text-white text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>{course.description ? 'تعديل وصف الكورس' : 'إضافة وصف للكورس'}</span>
+                  </button>
+                )}
+              </div>
+
+              {isEditingDescription && isAdmin ? (
+                <div className="space-y-2 p-3 rounded-2xl bg-[#050811] border border-cyan-700/50">
+                  <textarea
+                    rows={3}
+                    value={draftDescription}
+                    onChange={(e) => setDraftDescription(e.target.value)}
+                    placeholder="اكتب وصفاً واضحاً لمحتوى الكورس وأهدافه ليراه الطلاب قبل الاشتراك..."
+                    className="w-full bg-[#091224] border border-slate-700 rounded-xl p-3 text-xs sm:text-sm text-white focus:outline-none focus:border-cyan-400"
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingDescription(false)}
+                      className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateLecture(course.id, { description: draftDescription.trim() });
+                        setIsEditingDescription(false);
+                        showTempNotice('تم حفظ وصف الكورس على المنصة وقاعدة البيانات بنجاح.');
+                      }}
+                      className="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>حفظ الوصف</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                  {course.description || 'كورس متكامل يشمل شرح المحاضرات بالتفصيل، تسليم الواجبات، والامتحانات التفاعلية لمتابعة مستواك خطوة بخطوة.'}
+                </p>
+              )}
+            </div>
 
             {/* Important Instructions Callout */}
             <div className="p-3.5 rounded-2xl bg-[#050811] border border-cyan-800/40 space-y-1">
@@ -393,11 +455,20 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
               )}
             </div>
 
-            {!canAccessContent ? (
+            {!currentUser ? (
+              <button
+                type="button"
+                onClick={() => setIsLoginModalOpen(true)}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs sm:text-sm font-extrabold shadow-lg shadow-cyan-600/25 flex items-center gap-2 cursor-pointer transition-all"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>سجّل الدخول للاشتراك وفتح الكورس</span>
+              </button>
+            ) : !canAccessContent ? (
               <button
                 type="button"
                 onClick={() => setSelectedCourseForDetails(course)}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-extrabold shadow-lg shadow-amber-600/25 flex items-center gap-2 cursor-pointer transition-all"
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs sm:text-sm font-extrabold shadow-lg shadow-amber-600/25 flex items-center gap-2 cursor-pointer transition-all"
               >
                 <Lock className="w-4 h-4" />
                 <span>الاشتراك في الكورس الآن ({course.price} ج.م)</span>
@@ -411,6 +482,28 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Read-Only Curriculum Banner (Guests & Unsubscribed Students) */}
+      {!canAccessContent && (
+        <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5 text-xs sm:text-sm text-amber-200 leading-relaxed">
+            <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <span>
+              {!currentUser
+                ? 'أنت تستعرض الآن وصف ومحتويات الكورس فقط — يمكنك الاطلاع على أسماء المحاضرات والأقسام لمعرفة ما بداخل الكورس، ولفتح وتشغيل الفيديوهات والملفات يجب تسجيل الدخول والاشتراك أولاً.'
+                : 'أنت الآن في وضع قراءة وصف ومحتويات الكورس فقط — يمكنك قراءة أسماء المحاضرات والأقسام والتعليمات، وللدخول وتشغيل الفيديوهات أو فتح الملفات يجب الاشتراك في الكورس أولاً.'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => (!currentUser ? setIsLoginModalOpen(true) : setSelectedCourseForDetails(course))}
+            className="min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+          >
+            {!currentUser ? <LogIn className="w-3.5 h-3.5 shrink-0" /> : <Lock className="w-3.5 h-3.5 shrink-0" />}
+            <span>{!currentUser ? 'تسجيل الدخول للفتح' : 'اشترك للدخول للكورس الآن'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Course Curriculum Accordion: Lessons -> SubSections */}
       <div className="space-y-3">
@@ -526,7 +619,7 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
                               ) : (
                                 <>
                                   <Lock className="w-4 h-4 shrink-0" />
-                                  <span>اشترك للفتح</span>
+                                  <span>{!currentUser ? 'سجّل الدخول للفتح' : 'اشترك للفتح'}</span>
                                 </>
                               )}
                             </button>

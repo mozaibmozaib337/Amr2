@@ -231,6 +231,7 @@ export interface RegisteredAccount {
   governorate: string;
   role: 'student' | 'admin' | 'secretary';
   walletBalance: number;
+  enrolledLectureIds?: string[];
   registeredAt: string;
 }
 
@@ -349,6 +350,8 @@ export interface BroadcastNotification {
   targetGrade?: GradeLevel | 'all';
   createdAt: string;
   priority?: 'normal' | 'urgent';
+  audioUrl?: string;
+  audioDurationSeconds?: number;
 }
 
 export interface TeacherProfile {

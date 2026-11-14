@@ -125,15 +125,15 @@ export const SupportSection: React.FC = () => {
 
           <div className="p-4 bg-[#070e1c] border border-slate-800 rounded-2xl flex items-start gap-3.5">
             <div className="p-2.5 bg-cyan-500/10 text-cyan-400 rounded-xl shrink-0 mt-0.5">
-              <FileQuestion className="w-5 h-5" />
+              <Headphones className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="text-xs font-bold text-white">المساعد العلمي للكيمياء</h4>
+              <h4 className="text-xs font-bold text-white">الدعم المباشر مع السكرتارية والمعلم</h4>
               <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                شرح المسائل الصعبة، وتوضيح أفكار أسئلة الامتحانات والواجبات الكيميائية.
+                متابعة مباشرة مع تيم مستر عمرو السيد لحل مشاكل التسجيل والدفع ومراجعة استفسارات الطلاب هاتفياً أو عبر واتساب.
               </p>
               <span className="inline-block mt-2 text-xs font-bold text-cyan-400">
-                متاح طوال أيام الأسبوع
+                دعم بشري مباشر طوال أيام الأسبوع
               </span>
             </div>
           </div>

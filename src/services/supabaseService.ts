@@ -214,6 +214,10 @@ const TABLE_MAPPINGS: Record<string, string[]> = {
   payment_requests: ['payment_requests'],
   exam_submissions: ['exam_submissions'],
   question_bank: ['question_bank'],
+  broadcast_notifications: ['broadcast_notifications'],
+  authorized_students: ['authorized_students'],
+  student_access: ['student_access'],
+  recharge_codes: ['recharge_codes'],
 };
 
 /**
@@ -286,6 +290,8 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       governorate: data.governorate ? String(data.governorate) : undefined,
       age: data.age !== undefined ? Number(data.age) : undefined,
       subscription_type: data.subscriptionType ? String(data.subscriptionType) : undefined,
+      enrolled_lecture_ids: Array.isArray(data.enrolledLectureIds) ? data.enrolledLectureIds : undefined,
+      last_login_at: data.lastLoginAt ? String(data.lastLoginAt) : undefined,
     };
   }
 
@@ -293,9 +299,18 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
     return {
       id: validId,
       user_id: data.user_id || data.studentId ? ensureUuid(String(data.user_id || data.studentId)) : null,
+      student_name: data.studentName || data.student_name || undefined,
+      student_phone: data.studentPhone || data.student_phone || undefined,
+      lecture_id: data.lectureId || data.lecture_id || undefined,
+      lecture_title: data.lectureTitle || data.lecture_title || undefined,
       amount: Number(data.amount ?? 0),
+      payment_method_name: data.paymentMethodName || data.payment_method_name || undefined,
       status: String(data.status || 'pending_review'),
       receipt_url: String(data.screenshotUrl || data.receipt_url || ''),
+      submitted_at: data.submittedAt || data.submitted_at || undefined,
+      activation_deadline: data.activationDeadline || data.activation_deadline || undefined,
+      reviewed_at: data.reviewedAt || data.reviewed_at || undefined,
+      notes: data.notes || undefined,
     };
   }
 
@@ -345,6 +360,59 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       correct_answer_index: Number(data.correctAnswerIndex ?? 0),
       explanation: data.explanation || undefined,
       model_answer: data.modelAnswer || undefined,
+    };
+  }
+
+  if (tbl === 'broadcast_notifications') {
+    return {
+      id: validId,
+      title: String(data.title || ''),
+      message: String(data.message || ''),
+      sender_name: String(data.senderName || data.sender_name || 'مستر عمرو السيد'),
+      sender_role: String(data.senderRole || data.sender_role || 'admin'),
+      target_grade: String(data.targetGrade || data.target_grade || 'all'),
+      priority: String(data.priority || 'normal'),
+      audio_url: data.audioUrl || data.audio_url || null,
+      audio_duration_seconds:
+        data.audioDurationSeconds !== undefined ? Number(data.audioDurationSeconds) : null,
+      created_at: data.createdAt || data.created_at || new Date().toISOString(),
+    };
+  }
+
+  if (tbl === 'authorized_students') {
+    return {
+      id: validId,
+      student_name: String(data.studentName || data.student_name || 'طالب مصرح له'),
+      phone: String(data.phone || ''),
+      student_code: String(data.studentCode || data.student_code || ''),
+      lecture_id: String(data.lectureId || data.lecture_id || 'all'),
+      date_added: String(data.dateAdded || data.date_added || new Date().toISOString().split('T')[0]),
+    };
+  }
+
+  if (tbl === 'student_access') {
+    return {
+      id: validId,
+      student_id: String(data.studentId || data.student_id || id),
+      lectures: data.lectures || {},
+      exams: data.exams || {},
+      homeworks: data.homeworks || {},
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  if (tbl === 'recharge_codes') {
+    return {
+      id: validId,
+      code: String(data.code || id),
+      value: Number(data.value ?? 0),
+      is_used: Boolean(data.isUsed ?? data.is_used ?? false),
+      used_by: data.usedBy || data.used_by || null,
+      max_uses: Number(data.maxUses ?? data.max_uses ?? 1),
+      used_count: Number(data.usedCount ?? data.used_count ?? 0),
+      course_id: data.courseId || data.course_id || null,
+      course_title: data.courseTitle || data.course_title || null,
+      date_created: String(data.dateCreated || data.date_created || new Date().toISOString().split('T')[0]),
     };
   }
 
@@ -457,6 +525,10 @@ function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
     if (partial.governorate !== undefined) out.governorate = String(partial.governorate);
     if (partial.age !== undefined) out.age = Number(partial.age);
     if (partial.subscriptionType !== undefined) out.subscription_type = String(partial.subscriptionType);
+    if (partial.enrolledLectureIds !== undefined) {
+      out.enrolled_lecture_ids = Array.isArray(partial.enrolledLectureIds) ? partial.enrolledLectureIds : [];
+    }
+    if (partial.lastLoginAt !== undefined) out.last_login_at = String(partial.lastLoginAt);
     return out;
   }
 
@@ -464,6 +536,23 @@ function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
     if (partial.status !== undefined) out.status = String(partial.status);
     if (partial.amount !== undefined) out.amount = Number(partial.amount);
     if (partial.screenshotUrl !== undefined) out.receipt_url = String(partial.screenshotUrl);
+    if (partial.reviewedAt !== undefined) out.reviewed_at = String(partial.reviewedAt);
+    if (partial.notes !== undefined) out.notes = String(partial.notes);
+    return out;
+  }
+
+  if (tbl === 'recharge_codes') {
+    if (partial.isUsed !== undefined) out.is_used = Boolean(partial.isUsed);
+    if (partial.usedCount !== undefined) out.used_count = Number(partial.usedCount);
+    if (partial.usedBy !== undefined) out.used_by = String(partial.usedBy);
+    return out;
+  }
+
+  if (tbl === 'student_access') {
+    if (partial.lectures !== undefined) out.lectures = partial.lectures;
+    if (partial.exams !== undefined) out.exams = partial.exams;
+    if (partial.homeworks !== undefined) out.homeworks = partial.homeworks;
+    out.updated_at = new Date().toISOString();
     return out;
   }
 
@@ -572,6 +661,11 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
   }
 
   if (tbl === 'profiles') {
+    const enrolledList = Array.isArray(row.enrolled_lecture_ids)
+      ? row.enrolled_lecture_ids
+      : Array.isArray(base.enrolledLectureIds)
+      ? base.enrolledLectureIds
+      : [];
     return {
       ...base,
       id: base.id || String(row.id),
@@ -587,9 +681,10 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
       subscriptionType: row.subscription_type || base.subscriptionType || 'course',
       role: row.role || base.role || 'student',
       walletBalance: Number(row.wallet_balance ?? base.walletBalance ?? 0),
+      enrolledLectureIds: enrolledList,
       registeredAt: row.created_at ? String(row.created_at).split('T')[0] : base.registeredAt || new Date().toISOString().split('T')[0],
       isOnline: base.isOnline ?? false,
-      lastLoginAt: base.lastLoginAt,
+      lastLoginAt: row.last_login_at || base.lastLoginAt,
     };
   }
 
@@ -598,10 +693,18 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
       ...base,
       id: base.id || String(row.id),
       studentId: base.studentId || String(row.user_id || ''),
+      studentName: row.student_name || base.studentName || '',
+      studentPhone: row.student_phone || base.studentPhone || '',
+      lectureId: row.lecture_id || base.lectureId || '',
+      lectureTitle: row.lecture_title || base.lectureTitle || '',
       amount: Number(row.amount ?? base.amount ?? 0),
+      paymentMethodName: row.payment_method_name || base.paymentMethodName || 'تحويل بنكي / محفظة',
       status: row.status || base.status || 'pending_review',
       screenshotUrl: row.receipt_url || base.screenshotUrl || '',
-      submittedAt: base.submittedAt || (row.created_at ? String(row.created_at).replace('T', ' ').substring(0, 16) : ''),
+      submittedAt: row.submitted_at || base.submittedAt || (row.created_at ? String(row.created_at).replace('T', ' ').substring(0, 16) : ''),
+      activationDeadline: row.activation_deadline || base.activationDeadline || '',
+      reviewedAt: row.reviewed_at || base.reviewedAt,
+      notes: row.notes || base.notes,
     };
   }
 
@@ -653,6 +756,63 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
       correctAnswerIndex: Number(row.correct_answer_index ?? base.correctAnswerIndex ?? 0),
       explanation: row.explanation || base.explanation,
       modelAnswer: row.model_answer || base.modelAnswer,
+    };
+  }
+
+  if (tbl === 'broadcast_notifications') {
+    return {
+      ...base,
+      id: base.id || String(row.id),
+      title: row.title || base.title || '',
+      message: row.message ?? base.message ?? '',
+      senderName: row.sender_name || base.senderName || 'مستر عمرو السيد',
+      senderRole: row.sender_role || base.senderRole || 'admin',
+      targetGrade: row.target_grade || base.targetGrade || 'all',
+      priority: row.priority || base.priority || 'normal',
+      audioUrl: row.audio_url || base.audioUrl || undefined,
+      audioDurationSeconds:
+        row.audio_duration_seconds !== undefined && row.audio_duration_seconds !== null
+          ? Number(row.audio_duration_seconds)
+          : base.audioDurationSeconds,
+      createdAt: row.created_at || base.createdAt || new Date().toISOString(),
+    };
+  }
+
+  if (tbl === 'authorized_students') {
+    return {
+      ...base,
+      id: base.id || String(row.id),
+      studentName: row.student_name || base.studentName || 'طالب مصرح له',
+      phone: row.phone || base.phone || '',
+      studentCode: row.student_code || base.studentCode || '',
+      lectureId: row.lecture_id || base.lectureId || 'all',
+      dateAdded: row.date_added || base.dateAdded || new Date().toISOString().split('T')[0],
+    };
+  }
+
+  if (tbl === 'student_access') {
+    return {
+      ...base,
+      id: String(row.student_id || row.id || base.id || ''),
+      studentId: String(row.student_id || row.id || base.studentId || ''),
+      lectures: row.lectures || base.lectures || {},
+      exams: row.exams || base.exams || {},
+      homeworks: row.homeworks || base.homeworks || {},
+    };
+  }
+
+  if (tbl === 'recharge_codes') {
+    return {
+      ...base,
+      code: row.code || base.code || String(row.id),
+      value: Number(row.value ?? base.value ?? 0),
+      isUsed: Boolean(row.is_used ?? base.isUsed ?? false),
+      usedBy: row.used_by || base.usedBy || undefined,
+      maxUses: Number(row.max_uses ?? base.maxUses ?? 1),
+      usedCount: Number(row.used_count ?? base.usedCount ?? 0),
+      courseId: row.course_id || base.courseId || undefined,
+      courseTitle: row.course_title || base.courseTitle || undefined,
+      dateCreated: row.date_created || base.dateCreated || new Date().toISOString().split('T')[0],
     };
   }
 
@@ -723,6 +883,12 @@ export async function findStudentProfileInSupabase(identifier: string): Promise<
   }
 
   if (supaMatch && serverMatch) {
+    const mergedEnrolled = Array.from(
+      new Set([
+        ...(Array.isArray(supaMatch.enrolledLectureIds) ? supaMatch.enrolledLectureIds : []),
+        ...(Array.isArray(serverMatch.enrolledLectureIds) ? serverMatch.enrolledLectureIds : []),
+      ])
+    );
     return {
       ...serverMatch,
       ...supaMatch,
@@ -731,6 +897,7 @@ export async function findStudentProfileInSupabase(identifier: string): Promise<
       parentPhone: supaMatch.parentPhone || serverMatch.parentPhone || supaMatch.phone,
       studentCode: supaMatch.studentCode || serverMatch.studentCode,
       governorate: supaMatch.governorate || serverMatch.governorate || 'القاهرة',
+      enrolledLectureIds: mergedEnrolled,
     };
   }
 
@@ -771,7 +938,26 @@ export async function fetchAllProfilesFromSupabase(): Promise<RegisteredAccount[
   supaRows.forEach((sAcc) => {
     const key = ensureUuid(sAcc.id);
     const existing = merged.get(key);
-    merged.set(key, existing ? { ...existing, ...sAcc, id: existing.id || sAcc.id, password: sAcc.password || existing.password } : sAcc);
+    const mergedEnrolled = existing
+      ? Array.from(
+          new Set([
+            ...(Array.isArray(sAcc.enrolledLectureIds) ? sAcc.enrolledLectureIds : []),
+            ...(Array.isArray(existing.enrolledLectureIds) ? existing.enrolledLectureIds : []),
+          ])
+        )
+      : sAcc.enrolledLectureIds || [];
+    merged.set(
+      key,
+      existing
+        ? {
+            ...existing,
+            ...sAcc,
+            id: existing.id || sAcc.id,
+            password: sAcc.password || existing.password,
+            enrolledLectureIds: mergedEnrolled,
+          }
+        : sAcc
+    );
   });
 
   return Array.from(merged.values());
@@ -1151,13 +1337,18 @@ export async function saveDocument(
           const { error } = await smartUpsertRow(supabase, tbl, payload);
           if (error) {
             lastError = error;
-            console.error(`[Supabase Error on table '${tbl}']`, error.message, error);
+            const errCode = (error as any)?.code;
+            if (errCode === 'PGRST205' || /Could not find the table/i.test(error.message || '')) {
+              console.warn(`[Supabase] Table '${tbl}' not provisioned yet (run SQL in Admin Panel > Supabase).`);
+            } else {
+              console.error(`[Supabase Error on table '${tbl}']`, error.message, error);
+            }
           } else {
             hasSuccess = true;
           }
         } catch (tblErr: any) {
           lastError = tblErr;
-          console.error(`[Supabase Exception on table '${tbl}']`, tblErr?.message || tblErr, tblErr);
+          console.warn(`[Supabase Exception on table '${tbl}']`, tblErr?.message || tblErr);
         }
       }
     }

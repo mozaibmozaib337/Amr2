@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { usePlatform } from '../context/PlatformContext';
+import { usePlatform, ADMIN_EMAIL } from '../context/PlatformContext';
 import {
   X,
   PlusCircle,
@@ -55,6 +55,10 @@ import {
   UserCheck,
   Printer,
   Gift,
+  Mic,
+  Square,
+  Volume2,
+  FileAudio,
 } from 'lucide-react';
 import { GradeLevel, Question, Lecture, Exam, Homework, PaymentMethod, HonoredStudent, FileDocument, SubscriptionType, StudentDossier, UploadProgressInfo, TeacherProfile, CourseLesson } from '../types';
 import { QuestionReviewEditor } from './QuestionReviewEditor';
@@ -220,6 +224,17 @@ export const AdminPanelModal: React.FC = () => {
   const [notifMessage, setNotifMessage] = useState('');
   const [notifTarget, setNotifTarget] = useState<GradeLevel | 'all'>('all');
   const [notifPriority, setNotifPriority] = useState<'normal' | 'urgent'>('normal');
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+  const [recordedAudioDuration, setRecordedAudioDuration] = useState<number>(0);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [voiceRecorderError, setVoiceRecorderError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStartTsRef = useRef<number>(0);
 
   // Bulk Codes Generator State (up to 10,000 codes with 1 or 2 uses max)
   const [bulkCodeCount, setBulkCodeCount] = useState<number>(50);
@@ -568,7 +583,31 @@ export const AdminPanelModal: React.FC = () => {
     return () => clearTimeout(timer);
   }, [editingFile, updateFile]);
 
-  if (!isAdminPanelOpen) return null;
+  const cleanupVoiceRecorder = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
+    setIsRecordingVoice(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupVoiceRecorder();
+    };
+  }, []);
+
+  const isAuthorizedStaff =
+    currentUser?.role === 'admin' ||
+    currentUser?.role === 'secretary' ||
+    currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+  if (!isAdminPanelOpen || !isAuthorizedStaff) return null;
 
   // Real Video Upload & Duration Detection (reports exact duration, MB, speed, remaining time)
   const handleSelectVideoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1659,13 +1698,161 @@ export const AdminPanelModal: React.FC = () => {
     showNotice(`تم نسخ ${rechargeCodes.length} كود بنجاح إلى الحافظة!`);
   };
 
+  const formatAudioTime = (totalSec: number) => {
+    const mins = Math.floor(totalSec / 60);
+    const secs = Math.floor(totalSec % 60);
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const uploadAudioBlobToServer = async (blob: Blob, fileName: string): Promise<string> => {
+    try {
+      const res = await fetch('/api/upload-file', {
+        method: 'POST',
+        headers: {
+          'x-file-name': encodeURIComponent(fileName),
+          'Content-Type': blob.type || 'audio/webm',
+        },
+        body: blob,
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json?.success && json?.url) {
+          return json.url;
+        }
+      }
+    } catch {
+      // Fallback to data URL below
+    }
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('تعذر قراءة الملف الصوتي'));
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const handleStartVoiceRecording = async () => {
+    setVoiceRecorderError(null);
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceRecorderError('متصفحك الحالي لا يدعم التسجيل المباشر بالميكروفون. يمكنك رفع ملف صوتي جاهز من جهازك.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+      const chosenMime = mimeCandidates.find((m) => MediaRecorder.isTypeSupported?.(m));
+      const recorder = chosenMime ? new MediaRecorder(stream, { mimeType: chosenMime }) : new MediaRecorder(stream);
+
+      audioChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
+      recordingStartTsRef.current = Date.now();
+      setRecordingSeconds(0);
+      setRecordedAudioUrl(null);
+      setRecordedAudioDuration(0);
+      setIsRecordingVoice(true);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(Math.max(1, Math.round((Date.now() - recordingStartTsRef.current) / 1000)));
+      }, 500);
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          audioChunksRef.current.push(ev.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const elapsedSecs = Math.max(1, Math.round((Date.now() - recordingStartTsRef.current) / 1000));
+        const mimeType = recorder.mimeType || chosenMime || 'audio/webm';
+        const ext = mimeType.includes('mp4') ? 'm4a' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        cleanupVoiceRecorder();
+
+        if (audioBlob.size === 0) {
+          setVoiceRecorderError('لم يتم التقاط صوت. يرجى المحاولة مرة أخرى.');
+          return;
+        }
+
+        setIsUploadingAudio(true);
+        try {
+          const uploadedUrl = await uploadAudioBlobToServer(audioBlob, `voice_notif_${Date.now()}.${ext}`);
+          setRecordedAudioUrl(uploadedUrl);
+          setRecordedAudioDuration(elapsedSecs);
+        } catch {
+          setVoiceRecorderError('حدث خطأ أثناء معالجة التسجيل الصوتي.');
+        } finally {
+          setIsUploadingAudio(false);
+        }
+      };
+
+      recorder.start(250);
+    } catch {
+      cleanupVoiceRecorder();
+      setVoiceRecorderError('تعذر الوصول إلى الميكروفون. تأكد من السماح للموقع باستخدام الميكروفون أو ارفع ملفاً صوتياً.');
+    }
+  };
+
+  const handleStopVoiceRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    } else {
+      cleanupVoiceRecorder();
+    }
+  };
+
+  const handleUploadVoiceFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setVoiceRecorderError(null);
+    setIsUploadingAudio(true);
+    try {
+      const uploadedUrl = await uploadAudioBlobToServer(file, file.name);
+      const audioEl = document.createElement('audio');
+      audioEl.preload = 'metadata';
+      audioEl.src = uploadedUrl;
+      audioEl.onloadedmetadata = () => {
+        const dur = Number.isFinite(audioEl.duration) ? Math.round(audioEl.duration) : 0;
+        setRecordedAudioDuration(dur);
+      };
+      setRecordedAudioUrl(uploadedUrl);
+    } catch {
+      setVoiceRecorderError('تعذر رفع الملف الصوتي.');
+    } finally {
+      setIsUploadingAudio(false);
+    }
+  };
+
   const handleSendBroadcast = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!notifTitle.trim() || !notifMessage.trim()) return;
+    if (isRecordingVoice || isUploadingAudio) return;
+    const cleanTitle = notifTitle.trim() || (recordedAudioUrl ? 'رسالة صوتية جديدة من المعلم' : '');
+    const cleanMsg = notifMessage.trim();
+    if (!cleanTitle || (!cleanMsg && !recordedAudioUrl)) {
+      showNotice('⚠️ يرجى كتابة نص الرسالة أو تسجيل رسالة صوتية أولاً.');
+      return;
+    }
 
-    sendBroadcastNotification(notifTitle.trim(), notifMessage.trim(), notifTarget, notifPriority);
+    sendBroadcastNotification(
+      cleanTitle,
+      cleanMsg,
+      notifTarget,
+      notifPriority,
+      recordedAudioUrl
+        ? {
+            audioUrl: recordedAudioUrl,
+            audioDurationSeconds: recordedAudioDuration || undefined,
+          }
+        : undefined
+    );
     setNotifTitle('');
     setNotifMessage('');
+    setRecordedAudioUrl(null);
+    setRecordedAudioDuration(0);
+    setVoiceRecorderError(null);
     showNotice('⚡ تم إرسال وتعميم الرسالة لجميع الطلاب وظهور الجرس الأحمر بنجاح!');
   };
 
@@ -5405,7 +5592,7 @@ export const AdminPanelModal: React.FC = () => {
               <form onSubmit={handleSendBroadcast} className="bg-[#080d1b] border border-cyan-900/40 rounded-xl p-4 sm:p-5 space-y-4">
                 <h4 className="text-sm font-bold text-white flex items-center gap-2">
                   <Megaphone className="w-4 h-4 text-cyan-400" />
-                  <span>كتابة رسالة / إشعار جديد للطلاب</span>
+                  <span>كتابة رسالة أو تسجيل رسالة صوتية جديدة للطلاب</span>
                 </h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -5413,10 +5600,10 @@ export const AdminPanelModal: React.FC = () => {
                     <label className="block text-xs text-slate-300 mb-1">عنوان الرسالة أو التنبيه</label>
                     <input
                       type="text"
-                      required
+                      required={!recordedAudioUrl}
                       value={notifTitle}
                       onChange={(e) => setNotifTitle(e.target.value)}
-                      placeholder="مثال: موعد المحاضرة القادمة / امتحان شامل يوم الجمعة"
+                      placeholder="مثال: موعد المحاضرة القادمة / رسالة صوتية هامة"
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
                   </div>
@@ -5437,10 +5624,12 @@ export const AdminPanelModal: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs text-slate-300 mb-1">نص الرسالة والتفاصيل</label>
+                  <label className="block text-xs text-slate-300 mb-1">
+                    نص الرسالة والتفاصيل {recordedAudioUrl ? '(اختياري مع الرسالة الصوتية)' : ''}
+                  </label>
                   <textarea
-                    required
-                    rows={4}
+                    required={!recordedAudioUrl}
+                    rows={3}
                     value={notifMessage}
                     onChange={(e) => setNotifMessage(e.target.value)}
                     placeholder="اكتب رسالتك وتوجيهاتك للطلاب هنا بالتفصيل..."
@@ -5448,7 +5637,89 @@ export const AdminPanelModal: React.FC = () => {
                   />
                 </div>
 
-                <div className="flex items-center justify-between pt-1">
+                {/* Voice Recorder & Audio Upload Controls */}
+                <div className="p-3.5 bg-[#050811] border border-cyan-900/50 rounded-xl space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-cyan-300">
+                      <Volume2 className="w-4 h-4 text-cyan-400" />
+                      <span>إرفاق رسالة صوتية للطلاب (تسجيل مباشر أو ملف صوتي)</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {!isRecordingVoice ? (
+                        <button
+                          type="button"
+                          disabled={isUploadingAudio}
+                          onClick={handleStartVoiceRecording}
+                          className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Mic className="w-3.5 h-3.5" />
+                          <span>بدء تسجيل صوتي</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleStopVoiceRecording}
+                          className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors animate-pulse"
+                        >
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                          <span>إيقاف التسجيل ({formatAudioTime(recordingSeconds)})</span>
+                        </button>
+                      )}
+
+                      <label className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors">
+                        <FileAudio className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>رفع ملف صوتي</span>
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          onChange={handleUploadVoiceFile}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {isUploadingAudio && (
+                    <div className="flex items-center gap-2 text-xs text-cyan-300">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>جاري تجهيز ورفع التسجيل الصوتي...</span>
+                    </div>
+                  )}
+
+                  {voiceRecorderError && (
+                    <div className="p-2.5 rounded-lg bg-red-950/50 border border-red-500/40 text-red-300 text-[11px] flex items-center gap-2">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{voiceRecorderError}</span>
+                    </div>
+                  )}
+
+                  {recordedAudioUrl && !isRecordingVoice && (
+                    <div className="p-3 rounded-xl bg-[#091224] border border-cyan-700/40 flex flex-col sm:flex-row sm:items-center gap-3">
+                      <audio controls preload="metadata" src={recordedAudioUrl} className="w-full h-9" />
+                      <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                        {recordedAudioDuration > 0 && (
+                          <span className="text-[11px] font-mono bg-cyan-950 text-cyan-300 border border-cyan-800/50 px-2 py-1 rounded-lg">
+                            {formatAudioTime(recordedAudioDuration)}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRecordedAudioUrl(null);
+                            setRecordedAudioDuration(0);
+                          }}
+                          className="p-1.5 rounded-lg bg-red-950/60 text-red-300 hover:bg-red-600 hover:text-white transition-colors cursor-pointer"
+                          title="حذف التسجيل الصوتي"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                   <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
                     <input
                       type="checkbox"
@@ -5461,7 +5732,8 @@ export const AdminPanelModal: React.FC = () => {
 
                   <button
                     type="submit"
-                    className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md cursor-pointer flex items-center gap-2"
+                    disabled={isRecordingVoice || isUploadingAudio}
+                    className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition-all shadow-md cursor-pointer flex items-center gap-2"
                   >
                     <Send className="w-4 h-4" />
                     <span>إرسال وتعميم الرسالة للطلاب الآن 🚀</span>
@@ -5477,25 +5749,43 @@ export const AdminPanelModal: React.FC = () => {
 
                 {broadcastNotifications.length === 0 ? (
                   <p className="text-xs text-slate-500 p-4 bg-[#080d1b] rounded-xl text-center">
-                    لا توجد أي رسائل مرسلة بعد. اكتب أول رسالة أعلاه وستصل لجميع الطلاب فوراً.
+                    لا توجد أي رسائل مرسلة بعد. اكتب أول رسالة أو سجل رسالة صوتية أعلاه وستصل لجميع الطلاب فوراً.
                   </p>
                 ) : (
                   <div className="divide-y divide-slate-800 bg-[#080d1b] border border-slate-800 rounded-xl overflow-hidden">
                     {broadcastNotifications.map((notif) => (
                       <div key={notif.id} className="p-4 flex items-start justify-between gap-4 text-xs">
-                        <div className="space-y-1.5 flex-1">
-                          <div className="flex items-center gap-2">
+                        <div className="space-y-2 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="font-bold text-white text-sm">{notif.title}</span>
                             {notif.priority === 'urgent' && (
                               <span className="text-[10px] bg-red-600/20 text-red-300 border border-red-500/40 px-2 py-0.2 rounded-full font-bold">
                                 عاجل
                               </span>
                             )}
+                            {notif.audioUrl && (
+                              <span className="text-[10px] bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                                <Mic className="w-3 h-3" />
+                                <span>رسالة صوتية</span>
+                              </span>
+                            )}
                             <span className="text-[10px] bg-cyan-950 text-cyan-400 border border-cyan-800 px-2 py-0.2 rounded">
                               {notif.targetGrade === 'all' || !notif.targetGrade ? 'الكل' : notif.targetGrade}
                             </span>
                           </div>
-                          <p className="text-slate-300 whitespace-pre-wrap leading-relaxed">{notif.message}</p>
+                          {notif.message && (
+                            <p className="text-slate-300 whitespace-pre-wrap leading-relaxed">{notif.message}</p>
+                          )}
+                          {notif.audioUrl && (
+                            <div className="p-2.5 rounded-xl bg-[#050811] border border-cyan-900/40 flex items-center gap-2.5 max-w-md">
+                              <audio controls preload="metadata" src={notif.audioUrl} className="w-full h-9" />
+                              {notif.audioDurationSeconds ? (
+                                <span className="text-[10px] font-mono text-cyan-300 shrink-0">
+                                  {formatAudioTime(notif.audioDurationSeconds)}
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
                           <p className="text-[10px] text-slate-500 font-mono">
                             بواسطة: {notif.senderName} · {new Date(notif.createdAt).toLocaleString('ar-EG')}
                           </p>
@@ -6560,14 +6850,16 @@ export const AdminPanelModal: React.FC = () => {
                   )}
 
                   {(() => {
-                    const sqlSnippet = `-- 1. تحديث جدول الطلاب ليشمل كافة البيانات وكلمة المرور وهاتف ولي الأمر
+                    const sqlSnippet = `-- 1. تحديث جدول الطلاب ليشمل الاشتراكات وكلمة المرور وهاتف ولي الأمر
 ALTER TABLE public.profiles
   ADD COLUMN IF NOT EXISTS password text,
   ADD COLUMN IF NOT EXISTS parent_phone text,
   ADD COLUMN IF NOT EXISTS student_code text,
   ADD COLUMN IF NOT EXISTS governorate text,
   ADD COLUMN IF NOT EXISTS age integer,
-  ADD COLUMN IF NOT EXISTS subscription_type text;
+  ADD COLUMN IF NOT EXISTS subscription_type text,
+  ADD COLUMN IF NOT EXISTS enrolled_lecture_ids jsonb DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS last_login_at text;
 
 -- 2. تحديث جدول الامتحانات والواجبات لدعم النماذج السحابية
 ALTER TABLE public.assignments
@@ -6584,12 +6876,55 @@ ALTER TABLE public.courses
   ADD COLUMN IF NOT EXISTS instructions text,
   ADD COLUMN IF NOT EXISTS schedule_text text;
 
--- 4. تفعيل القراءة والكتابة الفورية من أي هاتف أو متصفح جديد (RLS Disable)
+-- 4. تحديث جدول الملفات وطلبات الدفع
+ALTER TABLE public.documents
+  ADD COLUMN IF NOT EXISTS lesson_title text,
+  ADD COLUMN IF NOT EXISTS course_id text,
+  ADD COLUMN IF NOT EXISTS category text;
+
+ALTER TABLE public.payment_requests
+  ADD COLUMN IF NOT EXISTS student_name text,
+  ADD COLUMN IF NOT EXISTS student_phone text,
+  ADD COLUMN IF NOT EXISTS lecture_id text,
+  ADD COLUMN IF NOT EXISTS lecture_title text,
+  ADD COLUMN IF NOT EXISTS payment_method_name text,
+  ADD COLUMN IF NOT EXISTS submitted_at text,
+  ADD COLUMN IF NOT EXISTS activation_deadline text,
+  ADD COLUMN IF NOT EXISTS reviewed_at text,
+  ADD COLUMN IF NOT EXISTS notes text;
+
+-- 5. إنشاء جداول الإشعارات الصوتية، التصريحات، سجل الدخول/الحل، والأكواد
+CREATE TABLE IF NOT EXISTS public.broadcast_notifications (
+  id text PRIMARY KEY, title text NOT NULL, message text DEFAULT '',
+  sender_name text, sender_role text DEFAULT 'admin', target_grade text DEFAULT 'all',
+  priority text DEFAULT 'normal', audio_url text, audio_duration_seconds integer,
+  created_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.authorized_students (
+  id text PRIMARY KEY, student_name text, phone text, student_code text,
+  lecture_id text DEFAULT 'all', date_added text, created_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.student_access (
+  id text PRIMARY KEY, student_id text, lectures jsonb DEFAULT '{}'::jsonb,
+  exams jsonb DEFAULT '{}'::jsonb, homeworks jsonb DEFAULT '{}'::jsonb,
+  updated_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.recharge_codes (
+  id text PRIMARY KEY, code text UNIQUE, value numeric DEFAULT 0, is_used boolean DEFAULT false,
+  used_by text, max_uses integer DEFAULT 1, used_count integer DEFAULT 0,
+  course_id text, course_title text, date_created text, created_at timestamp with time zone DEFAULT now()
+);
+
+-- 6. تفعيل القراءة والكتابة الفورية من أي هاتف أو متصفح جديد (RLS Disable)
 ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.courses DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.documents DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.assignments DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;`;
+ALTER TABLE public.payment_requests DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.broadcast_notifications DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.authorized_students DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.student_access DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.recharge_codes DISABLE ROW LEVEL SECURITY;`;
                     return (
                       <div className="bg-[#050811] border border-slate-700/80 rounded-xl p-3 space-y-2">
                         <div className="flex items-center justify-between gap-2">

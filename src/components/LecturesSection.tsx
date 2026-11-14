@@ -18,11 +18,13 @@ import {
   Calendar,
   ArrowLeft,
   Sliders,
+  Edit3,
+  Save,
 } from 'lucide-react';
 import { parseVideoUrl } from '../utils/linkParser';
 import { getCourseLessons, resolveCourseCover } from '../utils/courseCovers';
 import { CourseDetailView } from './CourseDetailView';
-import { GradeLevel } from '../types';
+import { GradeLevel, Lecture } from '../types';
 
 interface LecturesSectionProps {
   onlyEnrolled?: boolean;
@@ -43,8 +45,10 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
     setSelectedCourseForDetails,
     hasAccessToLecture,
     currentUser,
+    setIsLoginModalOpen,
     setIsAdminPanelOpen,
     addLecture,
+    updateLecture,
   } = usePlatform();
 
   const [courseFilter, setCourseFilter] = useState<'all' | 'free' | 'paid'>('all');
@@ -62,12 +66,18 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
   const [showQuickAddModal, setShowQuickAddModal] = useState(false);
   const [quickUrl, setQuickUrl] = useState('');
   const [lectureTitle, setLectureTitle] = useState('');
+  const [lectureDescription, setLectureDescription] = useState('');
   const [lectureChapter, setLectureChapter] = useState('الباب الأول');
   const [lectureDuration, setLectureDuration] = useState('60');
   const [lecturePrice, setLecturePrice] = useState('50');
   const [isFreeLecture, setIsFreeLecture] = useState(false);
   const [formNotice, setFormNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Inline Quick Description Editor State (Admin / Secretary)
+  const [editingDescCourse, setEditingDescCourse] = useState<Lecture | null>(null);
+  const [descDraft, setDescDraft] = useState('');
+  const [isSavingDesc, setIsSavingDesc] = useState(false);
 
   const handleVerifyVideoLink = () => {
     if (!quickUrl.trim()) {
@@ -122,7 +132,9 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
     try {
       const res = await addLecture({
         title: lectureTitle.trim(),
-        description: `كورس كيمياء معتمد لمنصة مستر عمرو السيد (${lectureDuration} دقيقة)`,
+        description:
+          lectureDescription.trim() ||
+          `كورس كيمياء معتمد لمنصة مستر عمرو السيد (${lectureDuration} دقيقة)`,
         chapterTitle: lectureChapter,
         grade: activeGrade === 'all' ? 'sec3' : activeGrade,
         durationMinutes: Number(lectureDuration) || 60,
@@ -145,6 +157,7 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
           setShowQuickAddModal(false);
           setQuickUrl('');
           setLectureTitle('');
+          setLectureDescription('');
           setFormNotice(null);
         }, 1200);
       }
@@ -310,14 +323,30 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
           {displayedLectures.map((lec) => {
             const isUnlocked = hasAccessToLecture(lec.id);
             const isFreeCourse = Boolean(lec.isFree || lec.price === 0);
-            const canEnterDirectly = isUnlocked || isFreeCourse || isAdmin;
+            const canEnterDirectly = Boolean(currentUser) && (isUnlocked || isFreeCourse || isAdmin);
             const lessonsCount = getCourseLessons(lec).length;
             const coverSrc = resolveCourseCover(lec);
+
+            const handleCardOrEnterCourse = () => {
+              if (!currentUser) {
+                setIsLoginModalOpen(true);
+                return;
+              }
+              if (canEnterDirectly) {
+                setOpenedCourseId(lec.id);
+              } else {
+                setSelectedCourseForDetails(lec);
+              }
+            };
+
+            const handleReadContents = () => {
+              setOpenedCourseId(lec.id);
+            };
 
             return (
               <article
                 key={lec.id}
-                onClick={() => setOpenedCourseId(lec.id)}
+                onClick={handleCardOrEnterCourse}
                 className={`bg-[#091224] border rounded-2xl overflow-hidden flex flex-col justify-between transition-all duration-200 hover:-translate-y-1 shadow-lg cursor-pointer group ${
                   isFreeCourse
                     ? 'border-emerald-900/60 hover:border-emerald-500/60 hover:shadow-emerald-900/20'
@@ -371,12 +400,29 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
 
                   {/* Course Card Body */}
                   <div className="p-5 space-y-3">
-                    <h3 className="font-extrabold text-base text-white group-hover:text-cyan-300 transition-colors line-clamp-2 leading-snug">
-                      {lec.title}
-                    </h3>
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-extrabold text-base text-white group-hover:text-cyan-300 transition-colors line-clamp-2 leading-snug">
+                        {lec.title}
+                      </h3>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingDescCourse(lec);
+                            setDescDraft(lec.description || '');
+                          }}
+                          title="تعديل وصف الكورس"
+                          className="shrink-0 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-cyan-600/30 border border-slate-700 hover:border-cyan-500/50 text-cyan-300 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          <span>وصف</span>
+                        </button>
+                      )}
+                    </div>
 
                     <p className="text-[14px] text-slate-300 line-clamp-2 leading-relaxed">
-                      {lec.description || 'انقر للدخول إلى الكورس واستعراض المحاضرات، الواجبات، والامتحانات التفاعلية.'}
+                      {lec.description || 'اضغط لقراءة محتويات الكورس والاطلاع على المحاضرات والواجبات والامتحانات.'}
                     </p>
 
                     <div className="flex items-center justify-between gap-3 text-xs sm:text-sm text-slate-400 pt-1">
@@ -408,16 +454,17 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setOpenedCourseId(lec.id);
+                      handleCardOrEnterCourse();
                     }}
                     className={`flex-1 min-h-[44px] font-bold flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
                       canEnterDirectly
                         ? 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-md shadow-cyan-600/25'
-                        : 'bg-[#050811] border border-slate-700 hover:border-cyan-500 text-slate-200'
+                        : 'bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/25'
                     }`}
                   >
-                    <span>{canEnterDirectly ? 'الدخول للكورس' : 'استعراض المنهج'}</span>
-                    <ArrowLeft className="w-4 h-4 shrink-0" />
+                    {!canEnterDirectly && <Lock className="w-4 h-4 shrink-0" />}
+                    <span>الدخول للكورس</span>
+                    {canEnterDirectly && <ArrowLeft className="w-4 h-4 shrink-0" />}
                   </button>
 
                   {!canEnterDirectly && (
@@ -425,12 +472,12 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSelectedCourseForDetails(lec);
+                        handleReadContents();
                       }}
-                      className="min-h-[44px] font-bold flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/25 transition-all cursor-pointer shrink-0"
+                      className="min-h-[44px] font-bold flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-[#050811] border border-slate-700 hover:border-cyan-500 text-slate-200 transition-all cursor-pointer shrink-0"
                     >
-                      <Lock className="w-4 h-4 shrink-0" />
-                      <span>الإشتراك</span>
+                      <BookOpen className="w-4 h-4 text-cyan-400 shrink-0" />
+                      <span>قراءة المحتويات</span>
                     </button>
                   )}
                 </div>
@@ -518,6 +565,17 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
                 />
               </div>
 
+              <div className="space-y-1.5">
+                <label className="block text-xs text-slate-300">وصف الكورس وما يتعلمه الطالب</label>
+                <textarea
+                  rows={3}
+                  value={lectureDescription}
+                  onChange={(e) => setLectureDescription(e.target.value)}
+                  placeholder="اكتب وصفاً مختصراً لمحتويات الكورس، المحاضرات، والواجبات..."
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs text-slate-300 mb-1">المدة (بالدقائق)</label>
@@ -594,6 +652,74 @@ export const LecturesSection: React.FC<LecturesSectionProps> = ({
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* INLINE QUICK DESCRIPTION EDITOR MODAL */}
+      {editingDescCourse && isAdmin && (
+        <div
+          className="fixed inset-0 z-60 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setEditingDescCourse(null)}
+        >
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setIsSavingDesc(true);
+              try {
+                await updateLecture(editingDescCourse.id, { description: descDraft.trim() });
+                setEditingDescCourse(null);
+              } finally {
+                setIsSavingDesc(false);
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#0b1329] border border-cyan-700/60 rounded-2xl w-full max-w-lg p-5 text-slate-100 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="font-bold text-base text-white flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-cyan-400" />
+                <span>تعديل وصف الكورس: {editingDescCourse.title}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingDescCourse(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-300">
+                وصف الكورس ومحتوياته:
+              </label>
+              <textarea
+                rows={4}
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                placeholder="اكتب وصفاً واضحاً لمحتويات الكورس والدروس والملفات..."
+                className="w-full bg-[#050811] border border-slate-700 focus:border-cyan-400 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setEditingDescCourse(null)}
+                className="min-h-[42px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingDesc}
+                className="min-h-[42px] px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                {isSavingDesc ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                <span>حفظ الوصف</span>
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

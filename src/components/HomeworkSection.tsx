@@ -267,14 +267,18 @@ export const HomeworkSection: React.FC = () => {
                   {hw.fileUrl && (
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        if (!currentUser) {
+                          setIsLoginModalOpen(true);
+                          return;
+                        }
                         setActiveDocument({
                           title: hw.title,
                           fileUrl: hw.fileUrl!,
                           fileName: hw.fileName,
                           fileType: hw.fileType,
-                        })
-                      }
+                        });
+                      }}
                       className="min-h-[44px] px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm rounded-xl font-semibold transition-colors cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0"
                     >
                       <FileText className="w-4 h-4 shrink-0" />

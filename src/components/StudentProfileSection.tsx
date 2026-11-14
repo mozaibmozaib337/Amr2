@@ -22,6 +22,7 @@ import {
   Search,
   Award,
   Clock,
+  PlayCircle,
 } from 'lucide-react';
 import { usePlatform, ADMIN_EMAIL } from '../context/PlatformContext';
 import { ExamSubmission, GradeLevel, Question, QuestionBankItem } from '../types';
@@ -34,7 +35,7 @@ interface StudentProfileSectionProps {
 type MainProfileTab = 'results' | 'custom_exam' | 'question_bank' | 'wallet_charge' | 'card_charge';
 type ResultsSubTab = 'homework' | 'exam' | 'evaluative';
 
-export const StudentProfileSection: React.FC<StudentProfileSectionProps> = () => {
+export const StudentProfileSection: React.FC<StudentProfileSectionProps> = ({ setActiveTab }) => {
   const {
     currentUser,
     activeGrade,
@@ -467,6 +468,30 @@ export const StudentProfileSection: React.FC<StudentProfileSectionProps> = () =>
               {currentUser.walletBalance} ج.م
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* Compact Courses Quick-Access Strip */}
+      <div className="p-3.5 sm:px-5 bg-[#091224] border border-cyan-900/40 rounded-2xl flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-200">
+          <PlayCircle className="w-4 h-4 text-cyan-400 shrink-0" />
+          <span>الوصول السريع للكورسات والمحاضرات الدراسية</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('lectures')}
+            className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold cursor-pointer transition-colors"
+          >
+            عرض جميع الكورسات
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('my_courses')}
+            className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-[#050811] border border-slate-700 hover:border-cyan-500 text-slate-200 text-xs font-bold cursor-pointer transition-colors"
+          >
+            كورساتي المفعّلة
+          </button>
         </div>
       </div>
 

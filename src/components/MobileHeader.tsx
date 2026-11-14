@@ -46,10 +46,10 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({ setActiveTab }) => {
   };
 
   return (
-    <header className="md:hidden sticky top-0 z-30 h-14 w-full bg-[#080e1e]/95 backdrop-blur-md border-b border-cyan-900/35 px-2.5">
-      <div className="h-full grid grid-cols-[auto_1fr_auto] items-center gap-1.5">
-        {/* Start (Right in RTL): Notifications + Wallet (when student) + Theme Toggle */}
-        <div className="flex items-center gap-1 shrink-0">
+    <header className="md:hidden relative z-20 h-14 w-full bg-transparent px-3">
+      <div className="h-full grid grid-cols-[auto_1fr_auto] items-center gap-2">
+        {/* Start (Right in RTL): Bell & Theme in Small Rectangles + Wallet */}
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -57,11 +57,11 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({ setActiveTab }) => {
               markBroadcastsAsRead();
             }}
             aria-label="الإشعارات"
-            className="relative w-10 h-10 rounded-xl bg-[#0d172e] border border-cyan-900/40 text-slate-200 flex items-center justify-center cursor-pointer shrink-0 whitespace-nowrap"
+            className="relative min-w-[38px] h-9 px-2 rounded-lg bg-[#0b1429] border border-cyan-800/50 text-slate-200 hover:border-cyan-400/60 hover:text-cyan-400 flex items-center justify-center cursor-pointer shrink-0 whitespace-nowrap transition-colors"
           >
             <Bell className="w-4 h-4 text-cyan-300" />
             {unreadBroadcastCount > 0 && (
-              <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 bg-red-600 text-white text-[10px] font-bold font-mono rounded-full flex items-center justify-center tabular-nums">
+              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-600 text-white text-[10px] font-bold font-mono rounded-full flex items-center justify-center tabular-nums">
                 {unreadBroadcastCount}
               </span>
             )}
@@ -72,10 +72,10 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({ setActiveTab }) => {
               type="button"
               onClick={() => setActiveTab('wallet')}
               aria-label="رصيد المحفظة"
-              className="h-10 px-2.5 rounded-xl bg-cyan-950/75 border border-cyan-600/50 text-cyan-300 text-xs font-extrabold flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 tabular-nums"
+              className="h-9 px-2 rounded-lg bg-yellow-400 hover:bg-yellow-300 border border-yellow-300 text-slate-950 text-xs font-extrabold flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 tabular-nums shadow-sm transition-colors"
             >
-              <Wallet className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span>{currentUser.walletBalance} ج.م</span>
+              <Wallet className="w-3.5 h-3.5 text-slate-950 shrink-0" />
+              <span className="text-slate-950">{currentUser.walletBalance} ج.م</span>
             </button>
           )}
 
@@ -83,17 +83,17 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({ setActiveTab }) => {
             type="button"
             onClick={cycleTheme}
             aria-label="تبديل المظهر الفاتح والداكن"
-            className="w-10 h-10 rounded-xl bg-[#0d172e] border border-cyan-900/40 text-slate-200 flex items-center justify-center cursor-pointer shrink-0 whitespace-nowrap"
+            className="min-w-[38px] h-9 px-2 rounded-lg bg-[#0b1429] border border-cyan-800/50 text-slate-200 hover:border-cyan-400/60 flex items-center justify-center cursor-pointer shrink-0 whitespace-nowrap transition-colors"
           >
             {getThemeIcon()}
           </button>
         </div>
 
-        {/* Center: Brand Logo / Title (Strictly single line) */}
+        {/* Center: Brand Logo Circle + Title (Unboxed single line) */}
         <button
           type="button"
           onClick={() => setActiveTab('home')}
-          className="flex items-center justify-center gap-1.5 min-w-0 cursor-pointer whitespace-nowrap"
+          className="flex items-center justify-center gap-1.5 min-w-0 cursor-pointer whitespace-nowrap bg-transparent border-0"
         >
           <div className="w-7 h-7 rounded-full overflow-hidden border border-cyan-400/80 shrink-0 bg-slate-900">
             <img
@@ -108,14 +108,14 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({ setActiveTab }) => {
           </span>
         </button>
 
-        {/* End (Left in RTL): Admin Control / Student Account + Logout Confirmation / Login CTA */}
-        <div className="flex items-center justify-end gap-1 shrink-0">
+        {/* End (Left in RTL): Standalone Action Controls */}
+        <div className="flex items-center justify-end gap-2 shrink-0">
           {isAdminOrSec ? (
             <>
               <button
                 type="button"
                 onClick={() => setIsAdminPanelOpen(true)}
-                className="min-h-[40px] px-2.5 rounded-full bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-xs font-bold flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 shadow-md"
+                className="min-h-[44px] text-cyan-400 text-xs font-extrabold flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 bg-transparent border-0"
               >
                 <Sliders className="w-3.5 h-3.5 shrink-0" />
                 <span>التحكم</span>
@@ -124,9 +124,9 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({ setActiveTab }) => {
                 type="button"
                 onClick={requestLogout}
                 aria-label="تسجيل الخروج"
-                className="w-10 h-10 rounded-xl bg-[#0d172e] border border-slate-700/70 text-red-300 flex items-center justify-center cursor-pointer shrink-0"
+                className="min-w-[38px] h-9 px-2 rounded-lg bg-red-600 hover:bg-red-500 border border-red-400/60 text-white flex items-center justify-center cursor-pointer shrink-0 shadow-sm transition-colors"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-4 h-4 text-white" />
               </button>
             </>
           ) : currentUser ? (
@@ -134,16 +134,16 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({ setActiveTab }) => {
               type="button"
               onClick={requestLogout}
               aria-label="تسجيل الخروج"
-              className="min-h-[40px] px-2.5 rounded-xl bg-[#0d172e] border border-red-800/50 text-red-300 text-xs font-bold flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+              className="h-9 px-2.5 rounded-lg bg-red-600 hover:bg-red-500 border border-red-400/60 text-white text-xs font-bold flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 shadow-sm transition-colors"
             >
-              <LogOut className="w-3.5 h-3.5 shrink-0" />
-              <span>خروج</span>
+              <LogOut className="w-3.5 h-3.5 text-white shrink-0" />
+              <span className="text-white">خروج</span>
             </button>
           ) : (
             <button
               type="button"
               onClick={() => setIsLoginModalOpen(true)}
-              className="min-h-[40px] px-3 rounded-full bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 shadow-md"
+              className="min-h-[44px] text-cyan-400 text-xs font-extrabold flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 bg-transparent border-0"
             >
               <LogIn className="w-3.5 h-3.5 shrink-0" />
               <span>دخول</span>

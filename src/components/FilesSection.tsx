@@ -260,6 +260,10 @@ export const FilesSection: React.FC = () => {
   };
 
   const handleOpenCourseSubDoc = (course: Lecture, lesson: CourseLesson, sub: LessonSubSection) => {
+    if (!currentUser) {
+      setIsLoginModalOpen(true);
+      return;
+    }
     const canAccess = isTeacherOrSec || Boolean(course.isFree || course.price === 0) || hasAccessToLecture(course.id);
     if (!canAccess) {
       setSelectedCourseForDetails(course);
@@ -318,14 +322,26 @@ export const FilesSection: React.FC = () => {
       <div className="mt-4 pt-3 border-t border-slate-800 flex items-center gap-2">
         <button
           type="button"
-          onClick={() =>
+          onClick={() => {
+            if (!currentUser) {
+              setIsLoginModalOpen(true);
+              return;
+            }
+            if (file.courseId) {
+              const linkedCourse = lectures.find((l) => l.id === file.courseId);
+              const isFreeLinked = Boolean(linkedCourse?.isFree || linkedCourse?.price === 0);
+              if (linkedCourse && !isTeacherOrSec && !isFreeLinked && !hasAccessToLecture(linkedCourse.id)) {
+                setSelectedCourseForDetails(linkedCourse);
+                return;
+              }
+            }
             setActiveDocument({
               title: file.title,
               fileUrl: file.fileUrl,
               fileName: file.fileName,
               fileType: file.fileType,
-            })
-          }
+            });
+          }}
           className="flex-1 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
         >
           <Eye className="w-4 h-4" />

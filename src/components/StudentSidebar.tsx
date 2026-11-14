@@ -32,9 +32,16 @@ import { PWAInstallButton } from './PWAInstallButton';
 interface StudentSidebarProps {
   activeTab: string;
   onSelectTab: (tab: string) => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSelectTab }) => {
+export const StudentSidebar: React.FC<StudentSidebarProps> = ({
+  activeTab,
+  onSelectTab,
+  isCollapsed: controlledCollapsed,
+  onToggleCollapse,
+}) => {
   const {
     currentUser,
     requestLogout,
@@ -51,7 +58,15 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
     markBroadcastsAsRead,
   } = usePlatform();
 
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const isCollapsed = controlledCollapsed ?? internalCollapsed;
+  const toggleCollapsed = () => {
+    if (onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      setInternalCollapsed((prev) => !prev);
+    }
+  };
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
 
   const isAdminOrSec =
@@ -185,7 +200,7 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
             ) : (
               <button
                 type="button"
-                onClick={() => setIsCollapsed((prev) => !prev)}
+                onClick={toggleCollapsed}
                 title={collapsed ? 'توسيع القائمة الجانبية' : 'طي القائمة الجانبية'}
                 aria-label={collapsed ? 'توسيع القائمة الجانبية' : 'طي القائمة الجانبية'}
                 className="p-2 rounded-xl bg-[#050811] border border-cyan-800/50 text-cyan-400 hover:bg-cyan-600 hover:text-white transition-colors cursor-pointer shrink-0"
@@ -454,10 +469,10 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ activeTab, onSel
 
   return (
     <>
-      {/* Desktop / Tablet Docked Collapsible Sidebar */}
+      {/* Desktop / Tablet Fixed Full-Height Collapsible Sidebar */}
       <aside
         aria-label="القائمة الجانبية"
-        className={`hidden md:flex shrink-0 sticky top-[73px] self-start h-[calc(100dvh-73px)] bg-[#091224] border-l border-cyan-900/35 flex-col justify-between transition-all duration-200 z-30 ${
+        className={`hidden md:flex fixed top-0 right-0 h-dvh bg-[#091224] border-l border-cyan-900/35 flex-col justify-between transition-all duration-200 z-40 ${
           isCollapsed ? 'w-[78px]' : 'w-64'
         }`}
       >

@@ -60,12 +60,12 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
 
   const getThemeIcon = () => {
     if (settings.themeMode === 'light') {
-      return <Sun className="w-4 h-4 text-amber-400" />;
+      return <Sun className="w-5 h-5 text-amber-400" />;
     }
     if (settings.themeMode === 'system') {
-      return <Monitor className="w-4 h-4 text-cyan-400" />;
+      return <Monitor className="w-5 h-5 text-cyan-400" />;
     }
-    return <Moon className="w-4 h-4 text-cyan-300" />;
+    return <Moon className="w-5 h-5 text-cyan-300" />;
   };
 
   const getThemeTitle = () => {
@@ -75,14 +75,14 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-[#080e1e]/95 backdrop-blur-md border-b border-cyan-900/30 transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+    <header className="relative z-20 w-full bg-transparent transition-colors">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 pb-2">
         <div className="flex items-center justify-between gap-4 flex-nowrap">
-          {/* Brand & Teacher Lockup */}
+          {/* Brand & Teacher Circle Lockup (Unboxed / Standalone) */}
           <button
             type="button"
             onClick={() => setActiveTab('home')}
-            className="flex items-center gap-3.5 shrink-0 text-right cursor-pointer"
+            className="flex items-center gap-3.5 shrink-0 text-right cursor-pointer bg-transparent border-0 p-0"
           >
             <div className="relative group shrink-0">
               <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-cyan-400/80 shadow-[0_0_15px_rgba(6,182,212,0.35)] bg-slate-900">
@@ -94,7 +94,7 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
                 />
               </div>
               <span
-                className="absolute -bottom-1 -left-1 bg-cyan-500 text-[#080e1e] p-0.5 rounded-full ring-2 ring-[#080e1e]"
+                className="absolute -bottom-1 -left-1 bg-cyan-500 text-[#080e1e] p-0.5 rounded-full ring-2 ring-[#070d1e]"
                 title="الكيمياء"
               >
                 <Sparkles className="w-3.5 h-3.5" />
@@ -107,14 +107,14 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
                   الكيمياء مع مستر عمرو السيد
                 </h1>
                 {isAdmin ? (
-                  <span className="text-[11px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-md flex items-center gap-1 whitespace-nowrap shrink-0">
-                    <ShieldCheck className="w-3 h-3 text-amber-400 shrink-0" />
-                    المشرف العام
+                  <span className="text-xs font-bold text-amber-400 flex items-center gap-1 whitespace-nowrap shrink-0">
+                    <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>المشرف العام</span>
                   </span>
                 ) : isSecretary ? (
-                  <span className="text-[11px] font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-md flex items-center gap-1 whitespace-nowrap shrink-0">
-                    <Users className="w-3 h-3 text-blue-400 shrink-0" />
-                    سكرتارية المنصة
+                  <span className="text-xs font-bold text-blue-400 flex items-center gap-1 whitespace-nowrap shrink-0">
+                    <Users className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                    <span>سكرتارية المنصة</span>
                   </span>
                 ) : null}
               </div>
@@ -124,9 +124,9 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
             </div>
           </button>
 
-          {/* Left Controls (in RTL): Notifications + Wallet Next to It, Theme Switcher, Grade Indicator/Selector, Admin/Student Actions */}
-          <div className="flex items-center gap-2 shrink-0 flex-nowrap">
-            {/* Notification Bell with Counter */}
+          {/* Standalone Unboxed Controls Scrolling Naturally With Header */}
+          <div className="flex items-center gap-3.5 shrink-0 flex-nowrap">
+            {/* Notification Bell in Small Rectangle */}
             <button
               type="button"
               onClick={() => {
@@ -135,58 +135,58 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
               }}
               title="إشعارات ورسائل المنصة"
               aria-label="إشعارات ورسائل المنصة"
-              className="relative min-h-[40px] p-2 rounded-xl bg-[#0d172e] border border-cyan-900/40 hover:border-cyan-500/50 text-slate-200 transition-all cursor-pointer flex items-center justify-center group shrink-0"
+              className="relative p-2 rounded-lg bg-[#0b1429] border border-cyan-800/50 text-slate-200 hover:border-cyan-400/60 hover:text-cyan-400 transition-all cursor-pointer flex items-center justify-center group shrink-0"
             >
-              <Bell className="w-4 h-4 text-cyan-300 group-hover:text-cyan-400 group-hover:scale-110 transition-transform" />
+              <Bell className="w-5 h-5 text-cyan-300 group-hover:text-cyan-400 group-hover:scale-110 transition-transform" />
               {unreadBroadcastCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 bg-red-600 border-2 border-[#080e1e] text-white text-[10px] font-bold font-mono rounded-full flex items-center justify-center animate-pulse shadow-md tabular-nums">
+                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[10px] font-bold font-mono rounded-full flex items-center justify-center shadow-md tabular-nums">
                   {unreadBroadcastCount}
                 </span>
               )}
             </button>
 
-            {/* Wallet Balance Capsule Directly Next to Notifications */}
+            {/* Wallet Balance in Yellow Box */}
             {currentUser && !isAdmin && !isSecretary && (
               <button
                 type="button"
                 onClick={() => setActiveTab('wallet')}
                 title="رصيد المحفظة - اضغط للشحن"
-                className="min-h-[40px] flex items-center gap-1.5 px-3 py-1.5 bg-cyan-950/60 border border-cyan-700/40 hover:border-cyan-500/60 text-cyan-300 text-xs font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-yellow-400 hover:bg-yellow-300 border border-yellow-300 text-slate-950 text-xs font-extrabold transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
               >
-                <Wallet className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                <span className="tabular-nums">{currentUser.walletBalance} ج.م</span>
-                <span className="text-[10px] text-cyan-400 bg-cyan-400/15 px-1.5 py-0.2 rounded font-extrabold">+</span>
+                <Wallet className="w-4 h-4 text-slate-950 shrink-0" />
+                <span className="tabular-nums text-slate-950">{currentUser.walletBalance} ج.م</span>
+                <span className="text-xs text-emerald-800 font-black">+</span>
               </button>
             )}
 
-            {/* Quick Theme Switcher Button */}
+            {/* Theme Switcher Icon in Small Rectangle */}
             <button
               type="button"
               onClick={cycleTheme}
               title={getThemeTitle()}
               aria-label={getThemeTitle()}
-              className="min-h-[40px] p-2 rounded-xl bg-[#0d172e] border border-cyan-900/40 hover:border-cyan-500/50 text-slate-200 transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="px-2.5 py-1.5 rounded-lg bg-[#0b1429] border border-cyan-800/50 text-slate-200 hover:border-cyan-400/60 hover:text-cyan-300 transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
             >
               {getThemeIcon()}
-              <span className="text-[11px] font-semibold hidden xl:inline text-slate-300 whitespace-nowrap">
+              <span className="text-xs font-semibold hidden xl:inline text-slate-300 whitespace-nowrap">
                 {settings.themeMode === 'light' ? 'فاتح' : settings.themeMode === 'system' ? 'تلقائي' : 'داكن'}
               </span>
             </button>
 
-            {/* Grade Indicator: Locked for logged-in Students (NO "جميع الصفوف الدراسية"); Selector for Admin / Secretary / Guests */}
+            {/* Grade Indicator / Selector in Green Rectangle */}
             {isStudent ? (
-              <div className="min-h-[40px] flex items-center gap-1.5 px-3 py-1.5 bg-[#0d172e] border border-cyan-800/60 rounded-xl text-cyan-300 text-xs font-bold shadow-sm whitespace-nowrap shrink-0">
-                <GraduationCap className="w-4 h-4 text-cyan-400 shrink-0" />
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-600 border border-emerald-400/60 text-white text-xs font-bold whitespace-nowrap shrink-0 shadow-sm">
+                <GraduationCap className="w-4 h-4 text-white shrink-0" />
                 <span>{gradeLabels[currentUser.grade] || 'الصف الثالث الثانوي'}</span>
               </div>
             ) : (
-              <div className="min-h-[40px] flex items-center bg-[#0d172e] border border-cyan-900/40 rounded-xl p-1 text-xs whitespace-nowrap shrink-0">
-                <GraduationCap className="w-4 h-4 text-cyan-400 mx-2 shrink-0" />
+              <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 border border-emerald-400/60 text-white text-xs whitespace-nowrap shrink-0 shadow-sm">
+                <GraduationCap className="w-4 h-4 text-white shrink-0" />
                 <select
                   value={activeGrade}
                   onChange={(e) => setActiveGrade(e.target.value as GradeLevel | 'all')}
                   aria-label="اختيار الصف الدراسي"
-                  className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer py-1 pe-2 whitespace-nowrap"
+                  className="bg-transparent border-0 text-white font-bold focus:outline-none cursor-pointer py-0.5 whitespace-nowrap"
                 >
                   <option value="all" className="bg-[#0b1329] text-white">جميع الصفوف الدراسية</option>
                   <option value="sec3" className="bg-[#0b1329] text-white">الصف الثالث الثانوي (2026)</option>
@@ -196,13 +196,13 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
               </div>
             )}
 
-            {/* Role Actions */}
+            {/* Standalone Role Actions */}
             {isAdmin || isSecretary ? (
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsAdminPanelOpen(true)}
-                  className="min-h-[40px] flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-cyan-600/20 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                  className="flex items-center gap-1.5 py-1.5 text-cyan-400 hover:text-cyan-300 text-xs font-extrabold transition-colors cursor-pointer whitespace-nowrap shrink-0 bg-transparent border-0"
                 >
                   <Sliders className="w-4 h-4 shrink-0" />
                   <span>لوحة التحكم</span>
@@ -212,44 +212,39 @@ export const Header: React.FC<HeaderProps> = ({ setActiveTab }) => {
                   onClick={requestLogout}
                   title="تسجيل الخروج"
                   aria-label="تسجيل الخروج"
-                  className="min-h-[40px] px-3 py-2 bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 rounded-xl border border-slate-700/60 transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 text-xs font-bold whitespace-nowrap"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 border border-red-400/60 text-white transition-colors cursor-pointer shrink-0 text-xs font-bold whitespace-nowrap shadow-sm"
                 >
-                  <LogOut className="w-4 h-4 shrink-0" />
-                  <span className="hidden lg:inline">خروج</span>
+                  <LogOut className="w-4 h-4 text-white shrink-0" />
+                  <span className="hidden lg:inline text-white">خروج</span>
                 </button>
               </div>
             ) : currentUser ? (
-              /* Student logged in: Profile Quick Access + Logout with confirmation (NO Control Panel) */
-              <div className="flex items-center gap-2 ps-2 border-s border-slate-800 shrink-0">
+              <div className="flex items-center gap-2.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setActiveTab('student_profile')}
                   title="الانتقال إلى حسابي"
-                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#0d172e] hover:border-cyan-500/50 border border-slate-800 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 border border-blue-400/60 text-white transition-colors cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
                 >
-                  <UserCircle2 className="w-5 h-5 text-cyan-400 shrink-0" />
-                  <div className="text-right">
-                    <p className="text-xs font-bold text-white leading-tight whitespace-nowrap">{currentUser.name}</p>
-                    <p className="text-[10px] text-cyan-400 whitespace-nowrap">حسابي</p>
-                  </div>
+                  <UserCircle2 className="w-4 h-4 text-white shrink-0" />
+                  <span className="text-xs font-bold text-white whitespace-nowrap">{currentUser.name}</span>
                 </button>
                 <button
                   type="button"
                   onClick={requestLogout}
                   title="تسجيل الخروج"
                   aria-label="تسجيل الخروج"
-                  className="min-h-[40px] px-3 py-2 bg-slate-800/80 hover:bg-red-500/20 text-slate-300 hover:text-red-300 rounded-xl border border-slate-700/50 transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 text-xs font-bold whitespace-nowrap"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 border border-red-400/60 text-white transition-colors cursor-pointer shrink-0 text-xs font-bold whitespace-nowrap shadow-sm"
                 >
-                  <LogOut className="w-4 h-4 shrink-0" />
-                  <span className="hidden lg:inline">خروج</span>
+                  <LogOut className="w-4 h-4 text-white shrink-0" />
+                  <span className="hidden lg:inline text-white">خروج</span>
                 </button>
               </div>
             ) : (
-              /* Guest / Not logged in */
               <button
                 type="button"
                 onClick={() => setIsLoginModalOpen(true)}
-                className="min-h-[40px] flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-cyan-600/25 cursor-pointer whitespace-nowrap shrink-0"
+                className="flex items-center gap-1.5 py-1.5 text-cyan-400 hover:text-cyan-300 text-xs font-extrabold transition-colors cursor-pointer whitespace-nowrap shrink-0 bg-transparent border-0"
               >
                 <User className="w-4 h-4 shrink-0" />
                 <span>تسجيل الدخول</span>
