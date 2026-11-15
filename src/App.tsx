@@ -24,6 +24,8 @@ import { TopRankingsDirectorySection } from './components/TopRankingsDirectorySe
 import { StudentDirectorySection } from './components/StudentDirectorySection';
 import { MobileHeader } from './components/MobileHeader';
 import { Footer } from './components/Footer';
+import { SplashScreen, SPLASH_SESSION_KEY } from './components/SplashScreen';
+import { PWAInstallBanner } from './components/PWAInstallBanner';
 
 const PROTECTED_EDUCATIONAL_TABS = new Set([
   'my_courses',
@@ -207,9 +209,19 @@ function MainApp() {
 }
 
 export default function App() {
+  const [showSplash, setShowSplash] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem(SPLASH_SESSION_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
+
   return (
     <PlatformProvider>
       <MainApp />
+      {!showSplash && <PWAInstallBanner />}
+      {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
     </PlatformProvider>
   );
 }

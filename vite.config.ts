@@ -11,16 +11,24 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
+        manifestFilename: 'manifest.json',
+        includeAssets: [
+          'icon.svg',
+          'apple-touch-icon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-512x512.png',
+          'splash-welcome.jpg',
+        ],
         manifest: {
           id: '/',
           name: 'منصة مستر عمرو السيد في الكيمياء',
-          short_name: 'الكيمياء',
+          short_name: 'مستر عمرو',
           description: 'المنصة الرسمية لمستر عمرو السيد في مادة الكيمياء للثانوية العامة والأزهرية.',
-          theme_color: '#070d1e',
-          background_color: '#070d1e',
+          theme_color: '#0e456e',
+          background_color: '#0a3252',
           display: 'standalone',
-          orientation: 'portrait',
+          orientation: 'any',
           dir: 'rtl',
           lang: 'ar',
           start_url: '/',
@@ -48,7 +56,9 @@ export default defineConfig(() => {
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
+          globIgnores: ['splash/**', 'pdfjs/**'],
+          navigateFallbackDenylist: [/^\/api\//, /^\/manifest\.json$/],
           runtimeCaching: [
             {
               urlPattern: /^\/api\/.*/i,
@@ -56,6 +66,10 @@ export default defineConfig(() => {
             },
             {
               urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: /\.(?:mp4|webm|mkv|mov|m4v|avi|mp3|wav|pdf|doc|docx|xls|xlsx|ppt|pptx)(\?.*)?$/i,
               handler: 'NetworkOnly',
             },
             {

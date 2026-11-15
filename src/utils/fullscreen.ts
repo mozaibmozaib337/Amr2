@@ -1,4 +1,4 @@
-export type FullscreenKind = 'native' | 'video' | 'css';
+export type FullscreenKind = 'native' | 'css';
 
 interface VendorDocument extends Document {
   webkitFullscreenElement?: Element | null;
@@ -15,12 +15,6 @@ interface VendorElement extends HTMLElement {
   webkitRequestFullScreen?: () => Promise<void> | void;
   mozRequestFullScreen?: () => Promise<void> | void;
   msRequestFullscreen?: () => Promise<void> | void;
-}
-
-interface VendorVideoElement extends HTMLVideoElement {
-  webkitEnterFullscreen?: () => void;
-  webkitExitFullscreen?: () => void;
-  webkitDisplayingFullscreen?: boolean;
 }
 
 export function getAnyFullscreenElement(): Element | null {
@@ -67,15 +61,15 @@ export function tryUnlockOrientation(): void {
 export async function enterElementFullscreen(
   containerEl: HTMLElement | null,
   options?: {
-    videoEl?: HTMLVideoElement | null;
     lockLandscape?: boolean;
   }
 ): Promise<FullscreenKind> {
   const lockLandscape = options?.lockLandscape ?? true;
   const el = containerEl as VendorElement | null;
-  const video = options?.videoEl as VendorVideoElement | null | undefined;
 
-  if (el) {
+  // NEVER call requestFullscreen or webkitEnterFullscreen on <video>;
+  // only call fullscreen on the parent container wrapping both <video> and platform controls.
+  if (el && el.tagName !== 'VIDEO') {
     try {
       if (typeof el.requestFullscreen === 'function') {
         await el.requestFullscreen();
@@ -103,27 +97,16 @@ export async function enterElementFullscreen(
         return 'native';
       }
     } catch {
-      // Fall through to iOS video or CSS fullscreen fallback
+      // Fall through to CSS full-viewport fallback (iOS Safari / PWA standalone)
     }
   }
 
-  // iOS Safari native <video> fullscreen support
-  if (video && typeof video.webkitEnterFullscreen === 'function') {
-    try {
-      video.webkitEnterFullscreen();
-      if (lockLandscape) tryLockLandscapeOnMobile();
-      return 'video';
-    } catch {
-      // Fall through to CSS full-viewport fallback
-    }
-  }
-
-  // CSS full-viewport fallback (works in iOS Safari, iOS PWA standalone, embedded frames)
+  // CSS full-viewport fallback (position: fixed; inset: 0; width: 100dvw; height: 100dvh)
   if (lockLandscape) tryLockLandscapeOnMobile();
   return 'css';
 }
 
-export async function exitAnyFullscreen(videoEl?: HTMLVideoElement | null): Promise<void> {
+export async function exitAnyFullscreen(): Promise<void> {
   if (typeof document !== 'undefined') {
     const doc = document as VendorDocument;
     try {
@@ -140,15 +123,6 @@ export async function exitAnyFullscreen(videoEl?: HTMLVideoElement | null): Prom
       }
     } catch {
       // Ignore errors if already exited
-    }
-  }
-
-  const video = videoEl as VendorVideoElement | null | undefined;
-  if (video && video.webkitDisplayingFullscreen && typeof video.webkitExitFullscreen === 'function') {
-    try {
-      video.webkitExitFullscreen();
-    } catch {
-      // Ignore
     }
   }
 

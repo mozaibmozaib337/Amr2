@@ -468,3 +468,53 @@ body {
 .animate-watermark {
   animation: watermarkFloat 18s ease-in-out infinite;
 }
+
+/* Completely suppress native browser <video> controls across iOS Safari, Android Chrome, and Desktop WebKit */
+video.platform-custom-video::-webkit-media-controls,
+video.platform-custom-video::-webkit-media-controls-enclosure,
+video.platform-custom-video::-webkit-media-controls-panel,
+video.platform-custom-video::-webkit-media-controls-play-button,
+video.platform-custom-video::-webkit-media-controls-start-playback-button,
+video.platform-custom-video::-webkit-media-controls-overlay-play-button,
+video.platform-custom-video::-webkit-media-controls-timeline,
+video.platform-custom-video::-webkit-media-controls-current-time-display,
+video.platform-custom-video::-webkit-media-controls-time-remaining-display,
+video.platform-custom-video::-webkit-media-controls-mute-button,
+video.platform-custom-video::-webkit-media-controls-volume-slider,
+video.platform-custom-video::-webkit-media-controls-fullscreen-button,
+video.platform-custom-video::-webkit-media-controls-toggle-closed-captions-button,
+video.platform-custom-video::-webkit-media-controls-overflow-button,
+video.platform-custom-video::-internal-media-controls-overflow-button,
+video::-webkit-media-controls,
+video::-webkit-media-controls-enclosure,
+video::-webkit-media-controls-panel,
+video::-webkit-media-controls-start-playback-button {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  -webkit-appearance: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+video.platform-custom-video {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+@keyframes splashFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-splash-in {
+  animation: splashFadeIn 0.45s ease-out forwards;
+}
+
