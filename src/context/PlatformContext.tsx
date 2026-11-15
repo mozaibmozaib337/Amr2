@@ -121,7 +121,7 @@ interface PlatformContextType {
   requestLogout: () => void;
   // Lectures / Videos
   lectures: Lecture[];
-  addLecture: (lecture: Omit<Lecture, 'id' | 'dateAdded'>) => Promise<{ success: boolean; error?: any; errorMessage?: string }> | void;
+  addLecture: (lecture: Omit<Lecture, 'id' | 'dateAdded'>) => Promise<{ success: boolean; error?: any; errorMessage?: string; data?: Lecture }> | void;
   updateLecture: (id: string, updated: Partial<Lecture>) => void;
   deleteLecture: (id: string) => void;
   // Homework
@@ -131,7 +131,7 @@ interface PlatformContextType {
   deleteHomework: (id: string) => void;
   // Files (PDF / Word / Excel / Images)
   files: FileDocument[];
-  addFile: (file: Omit<FileDocument, 'id' | 'dateAdded'>) => Promise<{ success: boolean; error?: any; errorMessage?: string }> | void;
+  addFile: (file: Omit<FileDocument, 'id' | 'dateAdded'>) => Promise<{ success: boolean; error?: any; errorMessage?: string; data?: FileDocument }> | void;
   updateFile: (id: string, updated: Partial<FileDocument>) => void;
   deleteFile: (id: string) => void;
   // Exams
@@ -597,7 +597,13 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                     ? {
                         ...ex,
                         ...inc,
-                        lessons: inc.lessons && inc.lessons.length > 0 ? inc.lessons : ex.lessons,
+                        lessons: Array.isArray(inc.lessons) ? inc.lessons : ex.lessons,
+                        draftLessons: Array.isArray(inc.draftLessons)
+                          ? inc.draftLessons
+                          : ex.draftLessons,
+                        isPublished:
+                          inc.isPublished !== undefined ? inc.isPublished : ex.isPublished,
+                        lastPublishedAt: inc.lastPublishedAt || ex.lastPublishedAt,
                         coverImageUrl: inc.coverImageUrl || ex.coverImageUrl,
                         instructions: inc.instructions ?? ex.instructions,
                         scheduleText: inc.scheduleText || ex.scheduleText,
@@ -2075,27 +2081,29 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       id: generateUuid(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
-    setLectures((prev) => [newLec, ...prev]);
     setIsAutoSaving(true);
-    const [res] = await Promise.all([
-      saveDocument('lectures', newLec.id, newLec),
-      patchServerCollection('lectures', 'upsert', { item: newLec }),
-    ]);
-    setIsAutoSaving(false);
-    setLastAutoSavedAt(new Date().toISOString());
-    return res;
+    try {
+      const res = await saveDocument('lectures', newLec.id, newLec);
+      if (!res.success) {
+        return { ...res, data: undefined };
+      }
+      setLectures((prev) => [newLec, ...prev]);
+      patchServerCollection('lectures', 'upsert', { item: newLec });
+      setLastAutoSavedAt(new Date().toISOString());
+      return { ...res, data: newLec };
+    } finally {
+      setIsAutoSaving(false);
+    }
   };
 
   const updateLecture = (id: string, updated: Partial<Lecture>) => {
-    let mergedItem: Lecture | null = null;
+    const existing = lectures.find((l) => l.id === id);
+    const mergedItem: Lecture | null = existing ? { ...existing, ...updated } : null;
     setLectures((prev) =>
-      prev.map((l) => {
-        if (l.id === id) {
-          mergedItem = { ...l, ...updated };
-          return mergedItem;
-        }
-        return l;
-      })
+      prev.map((l) => (l.id === id ? { ...l, ...updated } : l))
+    );
+    setSelectedCourseForDetails((prev) =>
+      prev && prev.id === id ? { ...prev, ...updated } : prev
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('lectures', id, mergedItem) : updateDocument('lectures', id, updated);
@@ -2113,6 +2121,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (activeVideo && 'id' in activeVideo && activeVideo.id === id) {
       setActiveVideo(null);
     }
+    setSelectedCourseForDetails((prev) => (prev && prev.id === id ? null : prev));
     setLastAutoSavedAt(new Date().toISOString());
   };
 
@@ -2133,15 +2142,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateHomework = (id: string, updated: Partial<Homework>) => {
-    let mergedItem: Homework | null = null;
+    const existing = homeworks.find((h) => h.id === id);
+    const mergedItem: Homework | null = existing ? { ...existing, ...updated } : null;
     setHomeworks((prev) =>
-      prev.map((h) => {
-        if (h.id === id) {
-          mergedItem = { ...h, ...updated };
-          return mergedItem;
-        }
-        return h;
-      })
+      prev.map((h) => (h.id === id ? { ...h, ...updated } : h))
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('homeworks', id, mergedItem) : updateDocument('homeworks', id, updated);
@@ -2166,15 +2170,19 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       id: generateUuid(),
       dateAdded: new Date().toISOString().split('T')[0],
     };
-    setFiles((prev) => [newFile, ...prev]);
     setIsAutoSaving(true);
-    const [res] = await Promise.all([
-      saveDocument('files', newFile.id, newFile),
-      patchServerCollection('files', 'upsert', { item: newFile }),
-    ]);
-    setIsAutoSaving(false);
-    setLastAutoSavedAt(new Date().toISOString());
-    return res;
+    try {
+      const res = await saveDocument('files', newFile.id, newFile);
+      if (!res.success) {
+        return { ...res, data: undefined };
+      }
+      setFiles((prev) => [newFile, ...prev]);
+      patchServerCollection('files', 'upsert', { item: newFile });
+      setLastAutoSavedAt(new Date().toISOString());
+      return { ...res, data: newFile };
+    } finally {
+      setIsAutoSaving(false);
+    }
   };
 
   const deleteFile = (id: string) => {
@@ -2188,15 +2196,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateFile = (id: string, updated: Partial<FileDocument>) => {
-    let mergedItem: FileDocument | null = null;
+    const existing = files.find((f) => f.id === id);
+    const mergedItem: FileDocument | null = existing ? { ...existing, ...updated } : null;
     setFiles((prev) =>
-      prev.map((f) => {
-        if (f.id === id) {
-          mergedItem = { ...f, ...updated };
-          return mergedItem;
-        }
-        return f;
-      })
+      prev.map((f) => (f.id === id ? { ...f, ...updated } : f))
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('files', id, mergedItem) : updateDocument('files', id, updated);
@@ -2224,15 +2227,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateExam = (id: string, updated: Partial<Exam>) => {
-    let mergedItem: Exam | null = null;
+    const existing = exams.find((e) => e.id === id);
+    const mergedItem: Exam | null = existing ? { ...existing, ...updated } : null;
     setExams((prev) =>
-      prev.map((e) => {
-        if (e.id === id) {
-          mergedItem = { ...e, ...updated };
-          return mergedItem;
-        }
-        return e;
-      })
+      prev.map((e) => (e.id === id ? { ...e, ...updated } : e))
     );
     setIsAutoSaving(true);
     const op = mergedItem ? saveDocument('exams', id, mergedItem) : updateDocument('exams', id, updated);

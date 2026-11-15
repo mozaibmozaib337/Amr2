@@ -1,695 +1,848 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import {
-  ChevronRight,
-  ChevronLeft,
   ZoomIn,
   ZoomOut,
   Download,
   Loader2,
-  RotateCw,
-  Eye,
-  Layers,
+  RotateCcw,
   X,
   Maximize2,
   Minimize2,
+  RefreshCw,
+  AlertCircle,
+  Eye,
 } from 'lucide-react';
+import {
+  enterElementFullscreen,
+  exitAnyFullscreen,
+  getAnyFullscreenElement,
+  subscribeFullscreenChange,
+} from '../utils/fullscreen';
+import {
+  classifyDocument,
+  downloadDocumentSafely,
+  fetchDocumentAsBlob,
+  loadPdfFromBytes,
+} from '../utils/pdfRenderer';
 
 interface InBrowserPdfViewerProps {
   fileUrl: string;
   fileName?: string;
   title?: string;
-}
-
-declare global {
-  interface Window {
-    pdfjsLib?: any;
-  }
+  fileType?: string;
 }
 
 export const InBrowserPdfViewer: React.FC<InBrowserPdfViewerProps> = ({
   fileUrl,
   fileName,
   title,
+  fileType,
 }) => {
   const [numPages, setNumPages] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [scale, setScale] = useState<number>(1.25);
-  const [rotation, setRotation] = useState<number>(0);
+  const [zoom, setZoom] = useState<number>(1);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [renderError, setRenderError] = useState<string | null>(null);
-  const [viewEngine, setViewEngine] = useState<'canvas' | 'native'>('canvas');
-  const [viewMode, setViewMode] = useState<'single' | 'continuous'>('single');
-  const [isBrowserPageOpen, setIsBrowserPageOpen] = useState<boolean>(false);
-  const [iframeLoaded, setIframeLoaded] = useState<boolean>(false);
-  const [loadTimedOut, setLoadTimedOut] = useState<boolean>(false);
-  const [iframeKey, setIframeKey] = useState<number>(0);
-  const [isPdfFullscreen, setIsPdfFullscreen] = useState<boolean>(false);
-  const [showFsControls, setShowFsControls] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState<number>(0);
+  const [isFullViewport, setIsFullViewport] = useState<boolean>(false);
+  const [isNativeFs, setIsNativeFs] = useState<boolean>(false);
+  const [blobPreviewUrl, setBlobPreviewUrl] = useState<string | null>(null);
 
   const viewerRootRef = useRef<HTMLDivElement | null>(null);
-  const fsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const continuousContainerRef = useRef<HTMLDivElement | null>(null);
-  const pdfDocRef = useRef<any>(null);
-  const renderTaskRef = useRef<any>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const pagesHostRef = useRef<HTMLDivElement | null>(null);
+  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
+  const activeBlobUrlRef = useRef<string | null>(null);
+  const renderGenerationRef = useRef<number>(0);
+  const renderedPagesRef = useRef<Set<number>>(new Set());
+  const inFlightTasksRef = useRef<Map<number, RenderTask>>(new Map());
+  const lazyObserverRef = useRef<IntersectionObserver | null>(null);
+  const isCssFallbackFsRef = useRef<boolean>(false);
+  const savedScrollYRef = useRef<number>(0);
+  const historyPushedRef = useRef<boolean>(false);
+  const closingViaPopstateRef = useRef<boolean>(false);
 
-  const triggerFsControlsTimer = () => {
-    setShowFsControls(true);
-    if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
-    if (document.fullscreenElement) {
-      fsHideTimerRef.current = setTimeout(() => {
-        setShowFsControls(false);
-      }, 3000);
-    }
-  };
+  const docMeta = useMemo(
+    () => classifyDocument(fileUrl, fileName, fileType),
+    [fileUrl, fileName, fileType]
+  );
 
+  // Sync native Fullscreen API changes cleanly with full-viewport mode
   useEffect(() => {
-    const onFsChange = () => {
-      const active = !!document.fullscreenElement;
-      setIsPdfFullscreen(active);
-      if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
-      if (active) {
-        setShowFsControls(false);
-      } else {
-        setShowFsControls(true);
+    return subscribeFullscreenChange((nativeActive) => {
+      setIsNativeFs(nativeActive);
+      if (nativeActive) {
+        isCssFallbackFsRef.current = false;
+        setIsFullViewport(true);
+      } else if (!isCssFallbackFsRef.current) {
+        setIsFullViewport(false);
       }
-    };
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => {
-      document.removeEventListener('fullscreenchange', onFsChange);
-      if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
-    };
+    });
   }, []);
 
-  const togglePdfFullscreen = () => {
-    const el = viewerRootRef.current;
-    if (!el) return;
-    if (!document.fullscreenElement) {
-      el.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
+  const closeFullViewport = useCallback((fromPopstate = false) => {
+    if (fromPopstate) {
+      closingViaPopstateRef.current = true;
     }
-  };
+    isCssFallbackFsRef.current = false;
+    exitAnyFullscreen().catch(() => {});
+    setIsFullViewport(false);
+  }, []);
 
-  // Helper to convert base64 data to binary Uint8Array
-  const dataUrlToUint8Array = (dataUrl: string): Uint8Array => {
-    const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  };
+  const openFullViewport = useCallback(async () => {
+    savedScrollYRef.current = window.scrollY || window.pageYOffset || 0;
+    setIsFullViewport(true);
+    const mode = await enterElementFullscreen(viewerRootRef.current, {
+      lockLandscape: false,
+    });
+    isCssFallbackFsRef.current = mode === 'css';
+  }, []);
 
-  // Google Drive 10s timeout timer
+  // Manage scroll restoration, body lock, and mobile Back button / Esc when full-viewport is active
   useEffect(() => {
-    const isDrive = fileUrl.includes('drive.google.com') || fileUrl.includes('docs.google.com');
-    if (isDrive) {
-      setViewEngine('native');
-      setIframeLoaded(false);
-      setLoadTimedOut(false);
-      const timer = setTimeout(() => {
-        setLoadTimedOut(true);
-      }, 10000); // 10 seconds timeout
-      return () => clearTimeout(timer);
+    if (!isFullViewport) return;
+
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+
+    closingViaPopstateRef.current = false;
+    try {
+      window.history.pushState(
+        { ...(window.history.state || {}), __inlineFileFullscreen: true },
+        '',
+        window.location.href
+      );
+      historyPushedRef.current = true;
+    } catch {
+      historyPushedRef.current = false;
     }
-  }, [fileUrl, iframeKey]);
 
-  // Load PDF Document with PDF.js
-  useEffect(() => {
-    let isCancelled = false;
-    setIsLoading(true);
-    setRenderError(null);
-    setCurrentPage(1);
+    const handlePopState = () => {
+      if (historyPushedRef.current) {
+        historyPushedRef.current = false;
+        closeFullViewport(true);
+      }
+    };
 
-    const loadPdf = async () => {
-      // 1. If Google Drive or Telegram post: immediately use isolated native view
-      if (fileUrl.includes('drive.google.com') || fileUrl.includes('docs.google.com') || fileUrl.includes('t.me') || fileUrl.includes('telegram.me')) {
-        if (!isCancelled) {
-          setViewEngine('native');
-          setIsLoading(false);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeFullViewport(false);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = prevBodyOverflow;
+      document.documentElement.style.overflow = prevHtmlOverflow;
+
+      if (historyPushedRef.current && !closingViaPopstateRef.current) {
+        historyPushedRef.current = false;
+        try {
+          if (window.history.state?.__inlineFileFullscreen) {
+            window.history.back();
+          }
+        } catch {
+          // ignore
         }
-        return;
       }
 
+      const targetY = savedScrollYRef.current;
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: targetY, behavior: 'auto' });
+      });
+    };
+  }, [isFullViewport, closeFullViewport]);
+
+  const cleanupPdfRenderers = useCallback(() => {
+    renderGenerationRef.current++;
+    if (lazyObserverRef.current) {
+      lazyObserverRef.current.disconnect();
+      lazyObserverRef.current = null;
+    }
+    inFlightTasksRef.current.forEach((task) => {
       try {
-        // Wait briefly for CDN script if needed
-        let pdfjs = window.pdfjsLib;
-        if (!pdfjs) {
-          await new Promise((res) => setTimeout(res, 600));
-          pdfjs = window.pdfjsLib;
+        task.cancel();
+      } catch {
+        // ignore
+      }
+    });
+    inFlightTasksRef.current.clear();
+    renderedPagesRef.current.clear();
+  }, []);
+
+  const renderSinglePage = useCallback(
+    async (pageNum: number, slotEl: HTMLDivElement, gen: number) => {
+      const pdfDoc = pdfDocRef.current;
+      const scrollEl = scrollContainerRef.current;
+      if (!pdfDoc || !scrollEl || gen !== renderGenerationRef.current) return;
+      if (renderedPagesRef.current.has(pageNum)) return;
+      renderedPagesRef.current.add(pageNum);
+
+      try {
+        const page = await pdfDoc.getPage(pageNum);
+        if (gen !== renderGenerationRef.current) return;
+
+        const baseWidth = Math.max(240, scrollEl.clientWidth || window.innerWidth || 360);
+        const dpr = Math.min(window.devicePixelRatio || 1, 3);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const fitWidthScale = baseWidth / Math.max(1, baseViewport.width);
+        const renderScale = fitWidthScale * zoom;
+        const viewport = page.getViewport({ scale: renderScale });
+
+        const cssW = Math.floor(viewport.width);
+        const cssH = Math.floor(viewport.height);
+
+        slotEl.style.width = `${cssW}px`;
+        slotEl.style.height = `${cssH}px`;
+
+        let canvas = slotEl.querySelector('canvas');
+        if (!canvas) {
+          canvas = document.createElement('canvas');
+          canvas.className = 'block bg-white w-full h-full';
+          slotEl.innerHTML = '';
+          slotEl.appendChild(canvas);
         }
 
-        if (!pdfjs) {
-          // Fall back gracefully to native iframe
-          if (!isCancelled) {
-            setViewEngine('native');
+        canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+        canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
+        canvas.style.width = `${cssW}px`;
+        canvas.style.height = `${cssH}px`;
+
+        const ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) return;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined;
+        const renderTask = page.render({
+          canvas,
+          canvasContext: ctx,
+          transform,
+          viewport,
+        });
+        inFlightTasksRef.current.set(pageNum, renderTask);
+        await renderTask.promise;
+        inFlightTasksRef.current.delete(pageNum);
+      } catch (err: any) {
+        inFlightTasksRef.current.delete(pageNum);
+        if (err?.name !== 'RenderingCancelledException' && gen === renderGenerationRef.current) {
+          renderedPagesRef.current.delete(pageNum);
+          console.warn(`PDF page ${pageNum} render warning:`, err);
+        }
+      }
+    },
+    [zoom]
+  );
+
+  const setupLazyPdfPages = useCallback(async () => {
+    const pdfDoc = pdfDocRef.current;
+    const host = pagesHostRef.current;
+    const scrollEl = scrollContainerRef.current;
+    if (!pdfDoc || !host || !scrollEl) return;
+
+    cleanupPdfRenderers();
+    const gen = renderGenerationRef.current;
+    const baseWidth = Math.max(240, scrollEl.clientWidth || window.innerWidth || 360);
+
+    const page1 = await pdfDoc.getPage(1);
+    if (gen !== renderGenerationRef.current) return;
+    const p1Base = page1.getViewport({ scale: 1 });
+    const defaultAspect = p1Base.height / Math.max(1, p1Base.width);
+    const estWidth = Math.floor(baseWidth * zoom);
+    const estHeight = Math.floor(estWidth * defaultAspect);
+
+    host.innerHTML = '';
+    const slots: HTMLDivElement[] = [];
+
+    for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+      const slot = document.createElement('div');
+      slot.dataset.page = String(pageNum);
+      slot.className = 'relative bg-white border-b border-slate-200/70 last:border-b-0 shrink-0';
+      slot.style.width = `${estWidth}px`;
+      slot.style.height = `${estHeight}px`;
+      host.appendChild(slot);
+      slots.push(slot);
+    }
+
+    const eagerCount = Math.min(3, slots.length);
+    for (let i = 0; i < eagerCount; i++) {
+      if (gen !== renderGenerationRef.current) return;
+      await renderSinglePage(i + 1, slots[i], gen);
+    }
+
+    if (slots.length > eagerCount && typeof IntersectionObserver !== 'undefined') {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const slotEl = entry.target as HTMLDivElement;
+            const p = Number(slotEl.dataset.page || 0);
+            if (p > 0) {
+              renderSinglePage(p, slotEl, gen);
+            }
+          });
+        },
+        {
+          root: scrollEl,
+          rootMargin: '1100px 0px',
+          threshold: 0.01,
+        }
+      );
+
+      for (let i = eagerCount; i < slots.length; i++) {
+        observer.observe(slots[i]);
+      }
+      lazyObserverRef.current = observer;
+    } else {
+      for (let i = eagerCount; i < slots.length; i++) {
+        if (gen !== renderGenerationRef.current) return;
+        await renderSinglePage(i + 1, slots[i], gen);
+      }
+    }
+  }, [cleanupPdfRenderers, renderSinglePage, zoom]);
+
+  // Load document content (Blob fetch for Supabase/uploaded PDF & Images, Drive preview iframe, Office embed)
+  useEffect(() => {
+    const { rawUrl, kind } = docMeta;
+    if (!rawUrl) {
+      setIsLoading(false);
+      setLoadError('رابط الملف غير متوفر أو فارغ.');
+      return;
+    }
+
+    let cancelled = false;
+    cleanupPdfRenderers();
+    pdfDocRef.current = null;
+    setNumPages(0);
+    setCurrentPage(1);
+    setLoadError(null);
+    setIsLoading(true);
+
+    if (activeBlobUrlRef.current) {
+      URL.revokeObjectURL(activeBlobUrlRef.current);
+      activeBlobUrlRef.current = null;
+    }
+    setBlobPreviewUrl(null);
+
+    if (kind === 'drive' || kind === 'iframe') {
+      return;
+    }
+
+    if (kind === 'office') {
+      const isPublicHttp = /^https?:\/\//i.test(rawUrl);
+      if (!isPublicHttp) {
+        fetchDocumentAsBlob(rawUrl, docMeta.mimeHint)
+          .then((loaded) => {
+            if (cancelled) {
+              URL.revokeObjectURL(loaded.blobUrl);
+              return;
+            }
+            activeBlobUrlRef.current = loaded.blobUrl;
+            setBlobPreviewUrl(loaded.blobUrl);
             setIsLoading(false);
+            setLoadError(
+              'ملفات Word و PowerPoint المرفوعة محلياً تتطلب تحويلها لـ PDF للعرض المباشر على الصفحة، يمكنك تحميل الملف الآن.'
+            );
+          })
+          .catch((err: any) => {
+            if (cancelled) return;
+            setIsLoading(false);
+            setLoadError(err?.message || 'تعذر تحميل مستند Office.');
+          });
+      }
+      return;
+    }
+
+    if (kind === 'image') {
+      fetchDocumentAsBlob(rawUrl, 'image/png')
+        .then((loaded) => {
+          if (cancelled) {
+            URL.revokeObjectURL(loaded.blobUrl);
+            return;
           }
+          activeBlobUrlRef.current = loaded.blobUrl;
+          setBlobPreviewUrl(loaded.blobUrl);
+          setIsLoading(false);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setBlobPreviewUrl(rawUrl);
+          }
+        });
+      return;
+    }
+
+    const loadPdf = async () => {
+      try {
+        const loaded = await fetchDocumentAsBlob(rawUrl, 'application/pdf');
+        if (cancelled) {
+          URL.revokeObjectURL(loaded.blobUrl);
+          return;
+        }
+        activeBlobUrlRef.current = loaded.blobUrl;
+        setBlobPreviewUrl(loaded.blobUrl);
+
+        const pdfDoc = await loadPdfFromBytes(loaded.bytes);
+        if (cancelled) {
+          Promise.resolve(pdfDoc.cleanup?.()).catch(() => {});
           return;
         }
 
-        pdfjs.GlobalWorkerOptions.workerSrc =
-          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
-        let source: any;
-        if (fileUrl.startsWith('data:')) {
-          source = { data: dataUrlToUint8Array(fileUrl) };
-        } else {
-          source = fileUrl;
-        }
-
-        const loadingTask = pdfjs.getDocument(source);
-        const pdfDoc = await loadingTask.promise;
-
-        if (isCancelled) return;
         pdfDocRef.current = pdfDoc;
         setNumPages(pdfDoc.numPages);
         setIsLoading(false);
+        await setupLazyPdfPages();
       } catch (err: any) {
-        if (!isCancelled) {
-          console.warn('PDF.js canvas load failed, switching to native embed:', err);
-          // Auto-fallback to native embed so user NEVER sees a broken view!
-          setViewEngine('native');
-          setRenderError(err.message || 'تم التبديل للعرض المباشر المدعوم بالمتصفح.');
-          setIsLoading(false);
-        }
+        if (cancelled) return;
+        console.error('[InBrowserPdfViewer] Load failed:', err);
+        setIsLoading(false);
+        setLoadError(err?.message || 'تعذر تحميل وعرض الملف. تأكد من اتصالك ثم أعد المحاولة.');
       }
     };
 
     loadPdf();
 
     return () => {
-      isCancelled = true;
-    };
-  }, [fileUrl]);
-
-  // Render Page for Single Page Mode (Canvas)
-  useEffect(() => {
-    if (viewEngine !== 'canvas' || viewMode !== 'single' || !pdfDocRef.current || isLoading) return;
-
-    let isCancelled = false;
-
-    const renderPage = async () => {
-      try {
-        if (renderTaskRef.current) {
-          renderTaskRef.current.cancel();
-        }
-
-        const page = await pdfDocRef.current.getPage(currentPage);
-        if (isCancelled) return;
-
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
-        const viewport = page.getViewport({ scale, rotation });
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        const outputScale = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = Math.floor(viewport.width) + 'px';
-        canvas.style.height = Math.floor(viewport.height) + 'px';
-
-        const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
-
-        const renderContext = {
-          canvasContext: ctx,
-          transform,
-          viewport,
-        };
-
-        const task = page.render(renderContext);
-        renderTaskRef.current = task;
-        await task.promise;
-      } catch (err: any) {
-        if (err?.name !== 'RenderingCancelledException') {
-          console.warn('Page render error:', err);
-        }
+      cancelled = true;
+      cleanupPdfRenderers();
+      if (pdfDocRef.current) {
+        Promise.resolve(pdfDocRef.current.cleanup?.()).catch(() => {});
+        pdfDocRef.current = null;
+      }
+      if (activeBlobUrlRef.current) {
+        URL.revokeObjectURL(activeBlobUrlRef.current);
+        activeBlobUrlRef.current = null;
       }
     };
+  }, [docMeta, retryKey, cleanupPdfRenderers, setupLazyPdfPages]);
 
-    renderPage();
+  // Re-layout PDF pages cleanly on zoom, full-viewport toggle, resize, or orientationchange
+  useEffect(() => {
+    if (docMeta.kind !== 'pdf' || !pdfDocRef.current) return;
+    const raf = requestAnimationFrame(() => {
+      setupLazyPdfPages();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [zoom, isFullViewport, docMeta.kind, setupLazyPdfPages]);
+
+  useEffect(() => {
+    if (docMeta.kind !== 'pdf' || !scrollContainerRef.current) return;
+    const el = scrollContainerRef.current;
+    let timer: number | null = null;
+
+    const scheduleRerender = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (pdfDocRef.current) {
+          setupLazyPdfPages();
+        }
+      }, 180);
+    };
+
+    const observer =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => scheduleRerender())
+        : null;
+    observer?.observe(el);
+    window.addEventListener('orientationchange', scheduleRerender);
 
     return () => {
-      isCancelled = true;
+      if (timer) window.clearTimeout(timer);
+      observer?.disconnect();
+      window.removeEventListener('orientationchange', scheduleRerender);
     };
-  }, [currentPage, scale, rotation, viewMode, viewEngine, isLoading]);
+  }, [docMeta.kind, setupLazyPdfPages]);
 
-  // Render All Pages for Continuous Scroll Mode (Canvas)
+  // Timeout check for Drive / Office / iframe sources
   useEffect(() => {
-    if (viewEngine !== 'canvas' || viewMode !== 'continuous' || !pdfDocRef.current || isLoading) return;
+    if (
+      (docMeta.kind !== 'drive' && docMeta.kind !== 'office' && docMeta.kind !== 'iframe') ||
+      !isLoading ||
+      loadError
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setIsLoading(false);
+      setLoadError('استغرق تحميل الملف وقتاً أطول من المعتاد. تأكد من صلاحية الملف ثم اضغط إعادة المحاولة.');
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [docMeta.kind, isLoading, loadError, retryKey]);
 
-    const container = continuousContainerRef.current;
-    if (!container) return;
+  const handleScrollTrackPage = () => {
+    const scrollEl = scrollContainerRef.current;
+    const host = pagesHostRef.current;
+    if (!scrollEl || !host || numPages <= 0) return;
 
-    container.innerHTML = '';
-
-    const renderAllPages = async () => {
-      for (let p = 1; p <= numPages; p++) {
-        try {
-          const page = await pdfDocRef.current.getPage(p);
-          const viewport = page.getViewport({ scale, rotation });
-          const canvas = document.createElement('canvas');
-          canvas.className = 'rounded-xl shadow-2xl bg-white mb-6 mx-auto block max-w-full';
-          container.appendChild(canvas);
-
-          const outputScale = window.devicePixelRatio || 1;
-          canvas.width = Math.floor(viewport.width * outputScale);
-          canvas.height = Math.floor(viewport.height * outputScale);
-          canvas.style.width = Math.floor(viewport.width) + 'px';
-          canvas.style.height = Math.floor(viewport.height) + 'px';
-
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
-            await page.render({ canvasContext: ctx, transform, viewport }).promise;
-          }
-        } catch (e) {
-          console.warn('Continuous page render error:', e);
-        }
+    const slots = host.querySelectorAll<HTMLDivElement>('div[data-page]');
+    const scrollTop = scrollEl.scrollTop + scrollEl.clientHeight * 0.25;
+    let active = 1;
+    slots.forEach((slotEl) => {
+      if (slotEl.offsetTop <= scrollTop) {
+        const p = Number(slotEl.dataset.page || 1);
+        if (p > 0) active = p;
       }
-    };
+    });
+    if (active !== currentPage) setCurrentPage(active);
+  };
 
-    renderAllPages();
-  }, [viewMode, viewEngine, scale, rotation, numPages, isLoading]);
+  const handleRefresh = () => {
+    setLoadError(null);
+    setIsLoading(true);
+    setRetryKey((k) => k + 1);
+  };
 
-  // Clean formatted URL for Google Drive preview, Telegram direct embed, or direct PDF
-  let unwrappedFileUrl = fileUrl;
-  if (unwrappedFileUrl.includes('url=')) {
-    try {
-      const match = unwrappedFileUrl.match(/url=([^&]+)/);
-      if (match && match[1]) {
-        unwrappedFileUrl = decodeURIComponent(match[1]);
-      }
-    } catch {}
-  }
+  const handleDownloadClick = () => {
+    downloadDocumentSafely(
+      docMeta.rawUrl,
+      fileName || `${title || 'document'}.pdf`,
+      blobPreviewUrl
+    );
+  };
 
-  const isGoogleDrive = unwrappedFileUrl.includes('drive.google.com') || unwrappedFileUrl.includes('docs.google.com');
-  const tgMatch = unwrappedFileUrl.match(/(?:t\.me|telegram\.me)\/([a-zA-Z0-9_]+)\/(\d+)/i);
-  const isTelegram = !!tgMatch;
-
-  const safeEmbedUrl = isGoogleDrive
-    ? (() => {
-        const driveMatch = unwrappedFileUrl.match(/(?:drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)|docs\.google\.com\/(?:document|spreadsheets|presentation)\/d\/)([a-zA-Z0-9_-]+)/i);
-        if (driveMatch && driveMatch[1]) {
-          return `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
-        }
-        return unwrappedFileUrl.replace(/\/view(\?.*)?$/, '/preview');
-      })()
-    : isTelegram
-    ? `https://t.me/${tgMatch[1]}/${tgMatch[2]}?embed=1`
-    : unwrappedFileUrl;
+  const { embedUrl, kind, isDrive } = docMeta;
 
   return (
     <div
       ref={viewerRootRef}
-      data-keep-dark={isPdfFullscreen ? 'true' : undefined}
-      onClick={() => {
-        if (isPdfFullscreen) {
-          setShowFsControls((prev) => {
-            const next = !prev;
-            if (fsHideTimerRef.current) clearTimeout(fsHideTimerRef.current);
-            if (next) {
-              fsHideTimerRef.current = setTimeout(() => setShowFsControls(false), 3000);
-            }
-            return next;
-          });
-        }
-      }}
-      onPointerMove={(e) => {
-        if (isPdfFullscreen && e.pointerType === 'mouse') {
-          triggerFsControlsTimer();
-        }
-      }}
-      className={`w-full h-full flex flex-col bg-[#070c18] overflow-hidden text-slate-100 relative ${
-        isPdfFullscreen ? 'rounded-none w-screen h-[100dvh]' : 'rounded-xl'
-      }`}
+      data-keep-dark={isFullViewport ? 'true' : undefined}
+      onContextMenu={(e) => e.preventDefault()}
+      style={
+        isFullViewport
+          ? { position: 'fixed', inset: 0, width: '100dvw', height: '100dvh' }
+          : undefined
+      }
+      className={
+        isFullViewport
+          ? 'z-[9999] bg-white overflow-hidden select-none flex flex-col'
+          : 'w-full h-full flex flex-col bg-white overflow-hidden relative rounded-xl select-none'
+      }
     >
-      {/* PDF Action Toolbar (Completely hidden in Fullscreen mode) */}
-      {!isPdfFullscreen && (
-      <div className="p-2 sm:p-3 bg-[#0a1122] border-b border-cyan-900/40 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-        {/* Engine Switcher */}
-        <div className="flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-xl border border-cyan-900/40">
-          <button
-            onClick={() => setViewEngine('canvas')}
-            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
-              viewEngine === 'canvas'
-                ? 'bg-cyan-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>مشغل تفاعلي Canvas</span>
-          </button>
-          <button
-            onClick={() => {
-              setViewEngine('native');
-              setIsBrowserPageOpen(true);
-            }}
-            className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-              viewEngine === 'native'
-                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md'
-                : 'bg-emerald-950/80 text-emerald-300 hover:text-white border border-emerald-800/40'
-            }`}
-            title="فتح المستند في صفحة كاملة داخل المنصة بقارئ المتصفح المباشر"
-          >
-            <Eye className="w-3.5 h-3.5 text-emerald-300" />
-            <span>عرض في التصفح المباشر (صفحة داخل المنصة) ⚡</span>
-          </button>
-        </div>
+      {/* Inline Top Action Toolbar (Only visible when NOT in full-viewport reader) */}
+      {!isFullViewport && (
+        <div className="px-3 py-2 bg-[#0a1122] border-b border-cyan-900/40 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-100">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={openFullViewport}
+              className="min-h-[40px] px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white font-bold flex items-center gap-1.5 cursor-pointer shadow-md"
+              title="فتح الملف على الشاشة بالكامل"
+            >
+              <Eye className="w-3.5 h-3.5 shrink-0" />
+              <span>فتح الملف</span>
+            </button>
 
-        {/* Navigation for Single Mode */}
-        {viewEngine === 'canvas' && numPages > 0 && viewMode === 'single' && (
-          <div className="flex items-center gap-1.5 bg-slate-900/80 px-2.5 py-1 rounded-xl border border-cyan-900/40">
-            <button
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage <= 1}
-              className="p-1 rounded-lg text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-              title="الصفحة السابقة"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-            <span className="text-xs font-mono font-bold text-cyan-300 px-1">
-              {currentPage} / {numPages}
-            </span>
-            <button
-              onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
-              disabled={currentPage >= numPages}
-              className="p-1 rounded-lg text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-              title="الصفحة التالية"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {/* View Mode Toggle (Canvas only) */}
-        {viewEngine === 'canvas' && (
-          <div className="flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-xl border border-cyan-900/40">
-            <button
-              onClick={() => setViewMode('single')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                viewMode === 'single'
-                  ? 'bg-slate-700 text-white'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              صفحة بصفحة
-            </button>
-            <button
-              onClick={() => setViewMode('continuous')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                viewMode === 'continuous'
-                  ? 'bg-slate-700 text-white'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              تمرير متصل
-            </button>
-          </div>
-        )}
-
-        {/* Zoom & Rotation Controls (Canvas only) */}
-        {viewEngine === 'canvas' && (
-          <div className="flex items-center gap-1 bg-slate-900/80 px-2 py-1 rounded-xl border border-cyan-900/40">
-            <button
-              onClick={() => setScale((s) => Math.max(0.6, s - 0.15))}
-              className="p-1 text-slate-300 hover:text-white cursor-pointer"
-              title="تصغير"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[11px] font-mono font-bold text-slate-300 px-1">
-              {Math.round(scale * 100)}%
-            </span>
-            <button
-              onClick={() => setScale((s) => Math.min(2.5, s + 0.15))}
-              className="p-1 text-slate-300 hover:text-white cursor-pointer"
-              title="تكبير"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <div className="w-[1px] h-3 bg-slate-700 mx-1" />
-            <button
-              onClick={() => setRotation((r) => (r + 90) % 360)}
-              className="p-1 text-slate-300 hover:text-cyan-300 cursor-pointer"
-              title="تدوير الصفحة 90 درجة"
-            >
-              <RotateCw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* In-Platform Download & Fullscreen */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={togglePdfFullscreen}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-cyan-700/50 text-cyan-300 hover:text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
-            title="ملء الشاشة"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-            <span>ملء الشاشة</span>
-          </button>
-          <a
-            href={fileUrl}
-            download={fileName || 'chemistry-document.pdf'}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md"
-            title="تحميل الملف على جهازك"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>تحميل</span>
-          </a>
-        </div>
-      </div>
-      )}
-
-      {/* Floating Controls in Fullscreen Mode (Auto-hides after 3s, toggleable by tap) */}
-      {isPdfFullscreen && (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 rounded-2xl bg-black/85 backdrop-blur-md border border-cyan-500/40 shadow-2xl transition-opacity duration-300 text-xs ${
-            showFsControls ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
-          }`}
-        >
-          {viewEngine === 'canvas' && numPages > 0 && viewMode === 'single' && (
-            <>
-              <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
-                className="p-1.5 rounded-lg text-slate-200 hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
-                title="الصفحة السابقة"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-              <span className="font-mono font-bold text-cyan-300 px-1">
+            {kind === 'pdf' && numPages > 0 && (
+              <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 font-mono font-bold tabular-nums text-cyan-300 whitespace-nowrap">
                 {currentPage} / {numPages}
               </span>
+            )}
+
+            <div className="flex items-center gap-1 bg-slate-900/90 px-1.5 py-0.5 rounded-xl border border-slate-700">
               <button
-                onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
-                disabled={currentPage >= numPages}
-                className="p-1.5 rounded-lg text-slate-200 hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
-                title="الصفحة التالية"
+                type="button"
+                onClick={() => setZoom((z) => Math.max(0.5, Number((z - 0.2).toFixed(2))))}
+                className="p-1.5 text-slate-300 hover:text-white cursor-pointer"
+                title="تصغير"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ZoomOut className="w-3.5 h-3.5" />
               </button>
-              <div className="w-[1px] h-4 bg-slate-700 mx-1" />
+              <button
+                type="button"
+                onClick={() => setZoom(1)}
+                className="px-1 font-mono font-bold text-[11px] tabular-nums text-slate-200 cursor-pointer"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(3, Number((z + 0.2).toFixed(2))))}
+                className="p-1.5 text-slate-300 hover:text-white cursor-pointer"
+                title="تكبير"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={handleRefresh}
+              className="min-h-[40px] px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 hover:text-white rounded-xl font-bold flex items-center gap-1.5 cursor-pointer"
+              title="تحديث العرض"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>تحديث</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleDownloadClick}
+              className="min-h-[40px] px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-cyan-700/50 text-cyan-300 hover:text-white rounded-xl font-bold flex items-center gap-1.5 cursor-pointer"
+              title="تحميل الملف"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>تحميل</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={openFullViewport}
+              className="min-h-[40px] px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold flex items-center gap-1.5 cursor-pointer shadow"
+              title="تكبير الشاشة"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+              <span>تكبير الشاشة</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Fixed Corner X Close Button (>= 44px) in Full-Viewport Mode */}
+      {isFullViewport && (
+        <button
+          type="button"
+          onClick={() => closeFullViewport(false)}
+          aria-label="إغلاق عارض الملف"
+          title="إغلاق والرجوع"
+          style={{
+            top: 'max(12px, env(safe-area-inset-top))',
+            right: 'max(12px, env(safe-area-inset-right))',
+          }}
+          className="fixed z-[10001] min-w-[44px] min-h-[44px] w-11 h-11 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white border border-white/25 shadow-xl backdrop-blur-md flex items-center justify-center cursor-pointer transition-transform active:scale-95"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      )}
+
+      {/* Translucent Floating Bottom File Toolbar in Full-Viewport Mode */}
+      {isFullViewport && (
+        <div
+          style={{
+            bottom: 'max(12px, env(safe-area-inset-bottom))',
+            left: '50%',
+            transform: 'translateX(-50%)',
+          }}
+          className="fixed z-[10001] flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-900/75 border border-white/20 text-white text-xs shadow-xl backdrop-blur-md max-w-[calc(100dvw-24px)]"
+        >
+          {kind === 'pdf' && numPages > 0 && (
+            <>
+              <span className="px-2 font-mono font-bold tabular-nums text-[11px] text-cyan-200 whitespace-nowrap">
+                {currentPage} / {numPages}
+              </span>
+              <span className="w-px h-4 bg-white/20" />
             </>
           )}
+
           <button
             type="button"
-            onClick={togglePdfFullscreen}
-            className="flex items-center gap-1.5 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold cursor-pointer"
-            title="الخروج من الشاشة الكاملة"
+            onClick={() => setZoom((z) => Math.max(0.5, Number((z - 0.2).toFixed(2))))}
+            aria-label="تصغير"
+            title="تصغير"
+            className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/15 cursor-pointer"
           >
-            <Minimize2 className="w-3.5 h-3.5" />
-            <span>خروج من ملء الشاشة</span>
+            <ZoomOut className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setZoom(1)}
+            title="ملاءمة العرض الكامل"
+            className="px-2 min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/15 font-mono font-bold text-[11px] tabular-nums cursor-pointer"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setZoom((z) => Math.min(3, Number((z + 0.2).toFixed(2))))}
+            aria-label="تكبير"
+            title="تكبير"
+            className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/15 cursor-pointer"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+
+          <span className="w-px h-4 bg-white/20" />
+
+          <button
+            type="button"
+            onClick={handleRefresh}
+            aria-label="تحديث"
+            title="تحديث"
+            className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/15 cursor-pointer"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadClick}
+            aria-label="تحميل الملف"
+            title="تحميل"
+            className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/15 text-cyan-200 cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (getAnyFullscreenElement()) {
+                closeFullViewport(false);
+              } else {
+                closeFullViewport(false);
+              }
+            }}
+            aria-label={isNativeFs ? 'تصغير الشاشة' : 'إغلاق ملء الشاشة'}
+            title={isNativeFs ? 'تصغير الشاشة' : 'تصغير الشاشة'}
+            className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/15 cursor-pointer"
+          >
+            <Minimize2 className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* PDF Viewport Area */}
+      {/* White Document Viewport Area */}
       <div
-        className={`flex-1 bg-[#050811] overflow-auto flex flex-col items-center justify-start relative select-none ${
-          isPdfFullscreen ? 'p-0' : 'p-2 sm:p-4'
-        }`}
+        ref={scrollContainerRef}
+        onScroll={handleScrollTrackPage}
+        className="flex-1 w-full overflow-auto m-0 p-0 bg-white relative"
       >
-        {isLoading && viewEngine === 'canvas' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#050811]/90 z-20 space-y-3">
-            <Loader2 className="w-10 h-10 animate-spin text-cyan-400" />
-            <p className="text-xs font-bold text-white">جاري تجهيز وعرض صفحات الـ PDF بدقة عالية...</p>
+        {isLoading && !loadError && (
+          <div className="absolute inset-0 z-20 bg-white flex flex-col items-center justify-center gap-3 p-6 text-slate-700">
+            <Loader2 className="w-8 h-8 animate-spin text-cyan-600" />
+            <p className="text-xs sm:text-sm font-bold">جاري تحميل وعرض الملف...</p>
           </div>
         )}
 
-        {/* Native Browser Embed (Foolproof, renders on 100% of browsers inside platform) */}
-        {viewEngine === 'native' && (
-          <div
-            className={`w-full h-full overflow-hidden bg-white shadow-2xl relative select-none ${
-              isPdfFullscreen ? 'rounded-none' : 'rounded-xl'
-            }`}
-          >
-            {/* Pop-out icon blocker mask for Google Drive (~70x70px top-right corner) */}
-            {isGoogleDrive && (
-              <div
-                className="absolute top-0 right-0 w-[72px] h-[72px] z-40 bg-transparent cursor-default pointer-events-auto"
-                title=""
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-                onContextMenu={(e) => e.preventDefault()}
-              />
-            )}
-
-            {/* Skeleton Loader while iframe is loading */}
-            {!iframeLoaded && (
-              <div className="absolute inset-0 z-20 bg-[#060b18] flex flex-col items-center justify-center p-6 space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-cyan-950 border border-cyan-800/60 flex items-center justify-center text-cyan-400">
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                </div>
-                <div className="text-center space-y-1">
-                  <p className="text-xs font-bold text-white">جاري تحميل وعرض المستند من Google Drive...</p>
-                  <p className="text-[11px] text-slate-400">يتم الفتح داخل عارض المنصة المدمج الآمن بدون تنزيل أو روابط خارجية</p>
-                </div>
-
-                {/* 10s Timeout Message & Retry Button */}
-                {loadTimedOut && (
-                  <div className="mt-2 p-3 bg-amber-950/80 border border-amber-600/50 rounded-xl text-center space-y-2 max-w-sm animate-fade-in">
-                    <p className="text-[11px] text-amber-200 font-semibold">
-                      ⚠️ الملف كبير أو أن اتصال السيرفر استغرق وقتاً أطول. جرّب لاحقاً أو أعد تحميل الصفحة.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIframeLoaded(false);
-                        setLoadTimedOut(false);
-                        setIframeKey((k) => k + 1);
-                      }}
-                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                    >
-                      إعادة المحاولة ↻
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <iframe
-              key={iframeKey}
-              src={safeEmbedUrl}
-              title={title || fileName || 'عرض مستند PDF'}
-              onLoad={() => setIframeLoaded(true)}
-              className="w-full h-full border-0"
-              sandbox="allow-scripts allow-same-origin allow-forms"
-            />
-          </div>
-        )}
-
-        {/* Single Page Canvas View */}
-        {viewEngine === 'canvas' && viewMode === 'single' && (
-          <div className="flex flex-col items-center justify-center my-auto">
-            <canvas
-              ref={canvasRef}
-              className="rounded-xl shadow-2xl bg-white max-w-full transition-transform duration-150"
-            />
-          </div>
-        )}
-
-        {/* Continuous Scroll View */}
-        {viewEngine === 'canvas' && viewMode === 'continuous' && (
-          <div
-            ref={continuousContainerRef}
-            className="w-full flex flex-col items-center space-y-4 py-2"
-          />
-        )}
-      </div>
-
-      {/* DEDICATED IN-PLATFORM FULL PAGE BROWSER VIEWER (صفحة جديدة كاملة داخل المنصة وليست تبويب خارجي مع زر الإغلاق X) */}
-      {isBrowserPageOpen && (
-        <div
-          className="fixed inset-0 z-70 bg-black/95 backdrop-blur-md flex flex-col animate-fade-in"
-          onContextMenu={(e) => e.preventDefault()}
-        >
-          {/* Header Bar (Hidden in Fullscreen mode) */}
-          {!isPdfFullscreen && (
-            <div className="bg-[#070d1c] border-b border-cyan-800/80 px-4 py-3 flex items-center justify-between text-white shadow-xl">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                  <Eye className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
-                    <span>{title || fileName || 'قراءة المستند بالتصفح المباشر'}</span>
-                    <span className="text-[10px] bg-cyan-950 text-cyan-400 px-2 py-0.5 rounded-full border border-cyan-800">
-                      صفحة مدمجة بالمنصة
-                    </span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    عرض وقراءة المستند بنظام المتصفح المباشر مع الحماية من الخروج أو كشف المصدر
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
+        {loadError && (
+          <div className="absolute inset-0 z-30 bg-white flex flex-col items-center justify-center gap-4 p-6 text-center text-slate-800">
+            <div className="w-12 h-12 rounded-2xl bg-red-50 border border-red-200 text-red-600 flex items-center justify-center">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div className="space-y-1 max-w-md">
+              <h3 className="text-sm sm:text-base font-extrabold text-slate-900">تعذر تحميل الملف</h3>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">{loadError}</p>
+            </div>
+            <div className="flex items-center gap-2.5 flex-wrap justify-center">
+              <button
+                type="button"
+                onClick={handleRefresh}
+                className="min-h-[44px] px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>إعادة المحاولة</span>
+              </button>
+              {blobPreviewUrl && (
                 <button
                   type="button"
-                  onClick={togglePdfFullscreen}
-                  className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 hover:text-white border border-cyan-700/60 transition-all cursor-pointer flex items-center gap-1.5"
-                  title="ملء الشاشة"
+                  onClick={handleDownloadClick}
+                  className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow"
                 >
-                  <Maximize2 className="w-4 h-4" />
-                  <span className="text-xs font-bold hidden sm:inline">ملء الشاشة</span>
+                  <Download className="w-4 h-4" />
+                  <span>تحميل الملف</span>
                 </button>
-
-                {/* Close Button X */}
-                <button
-                  onClick={() => setIsBrowserPageOpen(false)}
-                  className="p-2 rounded-xl bg-red-950/80 hover:bg-red-800 text-red-200 hover:text-white border border-red-700 transition-all cursor-pointer flex items-center gap-2 shadow-lg"
-                  title="إغلاق والرجوع للمنصة (X)"
-                >
-                  <X className="w-5 h-5" />
-                  <span className="text-xs font-bold hidden sm:inline">إغلاق الصفحة ✕</span>
-                </button>
-              </div>
+              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Full Screen Reader Viewport */}
-          <div className="flex-1 bg-white relative overflow-hidden">
-            {/* Pop-out icon blocker mask for Google Drive */}
-            {isGoogleDrive && (
-              <>
-                <div
-                  className="absolute top-0 right-0 w-32 h-24 z-40 bg-transparent cursor-default pointer-events-auto"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onContextMenu={(e) => e.preventDefault()}
-                />
-                <div
-                  className="absolute top-0 left-0 w-32 h-24 z-40 bg-transparent cursor-default pointer-events-auto"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onContextMenu={(e) => e.preventDefault()}
-                />
-              </>
-            )}
+        {kind === 'pdf' && (
+          <div
+            ref={pagesHostRef}
+            className="w-full min-h-full m-0 p-0 flex flex-col items-start bg-white"
+          />
+        )}
 
-            <iframe
-              src={safeEmbedUrl}
-              title={title || fileName || 'عرض تصفح مباشر داخل المنصة'}
-              className="w-full h-full border-0 select-none"
-              sandbox="allow-scripts allow-same-origin allow-forms"
+        {kind === 'image' && !loadError && blobPreviewUrl && (
+          <div className="w-full min-h-full m-0 p-0 flex items-start justify-start bg-white">
+            <img
+              key={`${blobPreviewUrl}_${retryKey}`}
+              src={blobPreviewUrl}
+              alt={title || fileName || 'صورة الملف'}
+              referrerPolicy="no-referrer"
+              onLoad={() => setIsLoading(false)}
+              onError={() => {
+                setIsLoading(false);
+                setLoadError('تعذر تحميل الصورة. تحقق من اتصال الإنترنت ثم أعد المحاولة.');
+              }}
+              style={{
+                width: `${zoom * 100}%`,
+                height: 'auto',
+                maxWidth: 'none',
+                display: 'block',
+              }}
             />
           </div>
-        </div>
-      )}
+        )}
+
+        {(kind === 'drive' || kind === 'office' || kind === 'iframe') &&
+          !loadError &&
+          embedUrl && (
+            <div
+              className="w-full h-full m-0 p-0 bg-white relative"
+              style={
+                zoom !== 1
+                  ? {
+                      width: `${zoom * 100}%`,
+                      height: `${zoom * 100}%`,
+                    }
+                  : undefined
+              }
+            >
+              {/* Transparent Pop-Out Corner Guard over Google Drive's Open-in-New-Tab button */}
+              {isDrive && (
+                <>
+                  <div
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                    className="absolute top-0 right-0 w-24 h-20 z-40 bg-transparent pointer-events-auto cursor-default"
+                  />
+                  <div
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                    className="absolute top-0 left-0 w-24 h-20 z-40 bg-transparent pointer-events-auto cursor-default"
+                  />
+                </>
+              )}
+
+              <iframe
+                key={`${embedUrl}_${retryKey}`}
+                src={embedUrl}
+                title={title || fileName || 'عرض المستند'}
+                onLoad={() => setIsLoading(false)}
+                onError={() => {
+                  setIsLoading(false);
+                  setLoadError('تعذر عرض المستند داخل الصفحة.');
+                }}
+                className="w-full h-full border-0 block bg-white"
+                allowFullScreen
+                sandbox={
+                  isDrive
+                    ? 'allow-scripts allow-same-origin allow-forms'
+                    : undefined
+                }
+              />
+            </div>
+          )}
+      </div>
     </div>
   );
 };

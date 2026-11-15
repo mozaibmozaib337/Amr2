@@ -1,7 +1,13 @@
 import coverElements from '../assets/images/course_cover_elements_1794567838925.jpg';
 import coverOrganic from '../assets/images/course_cover_organic_1794567838916.jpg';
 import coverAnalysis from '../assets/images/course_cover_analysis_1794567839061.jpg';
-import { CourseLesson, Lecture, LessonSectionKind, LessonSubSection } from '../types';
+import {
+  CourseLesson,
+  Lecture,
+  LessonSectionItem,
+  LessonSectionKind,
+  LessonSubSection,
+} from '../types';
 
 export interface CourseCoverPreset {
   id: string;
@@ -29,53 +35,75 @@ export function resolveCourseCover(course: Pick<Lecture, 'title' | 'chapterTitle
   return coverElements;
 }
 
-export interface SubSectionPresetTemplate {
-  key: string;
-  title: string;
-  kind: LessonSectionKind;
-  isDefault?: boolean;
-}
-
-export const STARTER_DEFAULT_SUBSECTIONS: SubSectionPresetTemplate[] = [
-  { key: 'lecture_video', title: 'شرح المحاضرة', kind: 'video', isDefault: true },
-  { key: 'homework_submit', title: 'تسليم الواجب', kind: 'homework', isDefault: true },
-  { key: 'interactive_exam', title: 'الاختبار التفاعلي', kind: 'exam', isDefault: true },
-];
-
-export const OPTIONAL_SUBSECTION_PRESETS: SubSectionPresetTemplate[] = [
-  { key: 'notes_pdf', title: 'مذكرات وملفات PDF', kind: 'pdf' },
-  { key: 'mendeleev_book', title: 'حل كتاب مندليف', kind: 'video' },
-  { key: 'exam_book', title: 'حل كتاب الامتحان', kind: 'video' },
-  { key: 'thanawya_past', title: 'ما ورد في امتحانات ثانوية عامة', kind: 'pdf' },
-];
-
-export function createSubSectionFromTemplate(tpl: SubSectionPresetTemplate): LessonSubSection {
-  return {
-    id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    title: tpl.title,
-    kind: tpl.kind,
-    isDefault: tpl.isDefault,
-  };
-}
-
 export function createStarterLesson(indexNumber = 1, title?: string): CourseLesson {
   return {
     id: `lesson_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    title: title || `المحاضرة ${indexNumber}: درس جديد`,
+    title: title || `الدرس ${indexNumber}: درس جديد`,
     description: '',
     order: indexNumber,
-    subSections: STARTER_DEFAULT_SUBSECTIONS.map(createSubSectionFromTemplate),
+    subSections: [],
   };
 }
 
 /**
- * Returns the structured lessons list for a course.
- * If the course is an older/flat lecture with no custom `lessons` array yet,
- * synthesizes a clean structured Lesson 1 using its top-level videoUrl and pdfUrl.
+ * Normalizes a section's items so both modern multi-item sections (`sub.items`)
+ * and legacy single-item sections render and edit uniformly.
+ */
+export function getSubSectionItems(sub: LessonSubSection): LessonSectionItem[] {
+  if (Array.isArray(sub.items) && sub.items.length > 0) {
+    return sub.items;
+  }
+  const hasDirectContent = Boolean(
+    sub.videoUrl?.trim() ||
+      sub.fileUrl?.trim() ||
+      sub.linkedExamId?.trim() ||
+      sub.linkedHomeworkId?.trim() ||
+      sub.externalUrl?.trim() ||
+      sub.textContent?.trim()
+  );
+  if (!hasDirectContent) return [];
+  return [
+    {
+      id: `${sub.id}_item_1`,
+      title: sub.title,
+      kind: sub.kind,
+      videoUrl: sub.videoUrl,
+      fileUrl: sub.fileUrl,
+      fileName: sub.fileName,
+      linkedExamId: sub.linkedExamId,
+      linkedHomeworkId: sub.linkedHomeworkId,
+      externalUrl: sub.externalUrl,
+      textContent: sub.textContent,
+      notes: sub.notes,
+      order: 1,
+    },
+  ];
+}
+
+export function buildEmptySectionItem(kind: LessonSectionKind, order = 1, defaultTitle = ''): LessonSectionItem {
+  return {
+    id: `item_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: defaultTitle || `عنصر ${order}`,
+    kind,
+    order,
+  };
+}
+
+/**
+ * Returns the structured published lessons list for a course.
+ * If the course is an older/flat lecture with no custom `lessons` array at all,
+ * synthesizes Lesson 1 from its top-level videoUrl and pdfUrl.
  */
 export function getCourseLessons(course: Lecture): CourseLesson[] {
-  if (Array.isArray(course.lessons) && course.lessons.length > 0) {
-    return course.lessons;
+  if (Array.isArray(course.lessons)) {
+    if (course.lessons.length > 0 || course.isPublished !== undefined) {
+      return course.lessons;
+    }
+  }
+
+  const hasTopMedia = Boolean(course.videoUrl?.trim() || course.pdfUrl?.trim());
+  if (!hasTopMedia) {
+    return [];
   }
 
   const starterSubSections: LessonSubSection[] = [
@@ -84,7 +112,6 @@ export function getCourseLessons(course: Lecture): CourseLesson[] {
       title: 'شرح المحاضرة',
       kind: 'video',
       videoUrl: course.videoUrl || '',
-      isDefault: true,
     },
   ];
 

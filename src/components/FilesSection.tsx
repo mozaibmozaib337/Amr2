@@ -24,8 +24,8 @@ import {
 } from 'lucide-react';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { parseDriveUrl } from '../utils/linkParser';
-import { getCourseLessons } from '../utils/courseCovers';
-import { openExternalSafe } from '../utils/safeExternalLink';
+import { getCourseLessons, getSubSectionItems } from '../utils/courseCovers';
+import { downloadDocumentSafely } from '../utils/pdfRenderer';
 import { CourseLesson, FileDocument, GradeLevel, Lecture, LessonSubSection } from '../types';
 
 export const FilesSection: React.FC = () => {
@@ -118,21 +118,57 @@ export const FilesSection: React.FC = () => {
       .forEach((course) => {
         const lessons = getCourseLessons(course);
         lessons.forEach((lesson) => {
-          const docSubs = lesson.subSections.filter((sub) => {
-            const isDocKind =
-              sub.kind === 'pdf' ||
-              sub.kind === 'link' ||
-              (sub.kind === 'homework' && Boolean(sub.fileUrl));
-            if (!isDocKind) return false;
-            if (selectedCategory !== 'all' && !sub.title.includes(selectedCategory)) {
-              return false;
+          const docSubs: LessonSubSection[] = [];
+          lesson.subSections.forEach((sub) => {
+            const items = getSubSectionItems(sub);
+            if (items.length > 0) {
+              items.forEach((item) => {
+                const isDocItem =
+                  item.kind === 'pdf' ||
+                  item.kind === 'link' ||
+                  (item.kind === 'homework' && Boolean(item.fileUrl));
+                if (!isDocItem) return;
+                if (selectedCategory !== 'all' && !sub.title.includes(selectedCategory) && !item.title.includes(selectedCategory)) {
+                  return;
+                }
+                if (
+                  q &&
+                  !item.title.toLowerCase().includes(q) &&
+                  !sub.title.toLowerCase().includes(q) &&
+                  !lesson.title.toLowerCase().includes(q) &&
+                  !course.title.toLowerCase().includes(q)
+                ) {
+                  return;
+                }
+                docSubs.push({
+                  id: `${sub.id}_${item.id}`,
+                  title: item.title !== sub.title ? `${sub.title} — ${item.title}` : sub.title,
+                  kind: item.kind,
+                  fileUrl: item.fileUrl,
+                  fileName: item.fileName,
+                  externalUrl: item.externalUrl,
+                  notes: item.notes || sub.notes,
+                });
+              });
+            } else {
+              const isDocKind =
+                sub.kind === 'pdf' ||
+                sub.kind === 'link' ||
+                (sub.kind === 'homework' && Boolean(sub.fileUrl));
+              if (!isDocKind) return;
+              if (selectedCategory !== 'all' && !sub.title.includes(selectedCategory)) {
+                return;
+              }
+              if (
+                q &&
+                !sub.title.toLowerCase().includes(q) &&
+                !lesson.title.toLowerCase().includes(q) &&
+                !course.title.toLowerCase().includes(q)
+              ) {
+                return;
+              }
+              docSubs.push(sub);
             }
-            if (!q) return true;
-            return (
-              sub.title.toLowerCase().includes(q) ||
-              lesson.title.toLowerCase().includes(q) ||
-              course.title.toLowerCase().includes(q)
-            );
           });
 
           if (docSubs.length > 0) {
@@ -251,12 +287,10 @@ export const FilesSection: React.FC = () => {
       setIsLoginModalOpen(true);
       return;
     }
-    const a = document.createElement('a');
-    a.href = fileUrl;
-    a.download = fileName || 'مذكرة_كيمياء_مستر_عمرو_السيد.pdf';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    downloadDocumentSafely(
+      fileUrl,
+      fileName || 'مذكرة_كيمياء_مستر_عمرو_السيد.pdf'
+    );
   };
 
   const handleOpenCourseSubDoc = (course: Lecture, lesson: CourseLesson, sub: LessonSubSection) => {
@@ -282,7 +316,13 @@ export const FilesSection: React.FC = () => {
     }
 
     if (sub.externalUrl) {
-      openExternalSafe(sub.externalUrl);
+      const parsedDrive = parseDriveUrl(sub.externalUrl);
+      setActiveDocument({
+        title: `${lesson.title} — ${sub.title}`,
+        fileUrl: parsedDrive.isValid ? parsedDrive.previewUrl : sub.externalUrl,
+        fileName: sub.fileName || sub.title,
+        fileType: parsedDrive.isValid ? 'pdf' : 'other',
+      });
     }
   };
 
@@ -319,10 +359,9 @@ export const FilesSection: React.FC = () => {
         </div>
       </div>
 
-      <div className="mt-4 pt-3 border-t border-slate-800 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
+      <div className="mt-4 pt-3 border-t border-slate-800 flex flex-wrap items-center gap-2">
+        {(() => {
+          const openFileViewer = () => {
             if (!currentUser) {
               setIsLoginModalOpen(true);
               return;
@@ -341,12 +380,29 @@ export const FilesSection: React.FC = () => {
               fileName: file.fileName,
               fileType: file.fileType,
             });
-          }}
-          className="flex-1 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
-        >
-          <Eye className="w-4 h-4" />
-          <span>عرض في المشغل المدمج</span>
-        </button>
+          };
+          return (
+            <>
+              <button
+                type="button"
+                onClick={openFileViewer}
+                className="flex-1 min-w-[120px] py-2 px-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Eye className="w-4 h-4 shrink-0" />
+                <span>المشغل المدمج</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={openFileViewer}
+                className="flex-1 min-w-[110px] py-2 px-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white border border-cyan-800/50 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                <span>فتح على الويب</span>
+              </button>
+            </>
+          );
+        })()}
 
         {currentUser ? (
           <button

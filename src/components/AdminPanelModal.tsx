@@ -64,6 +64,7 @@ import { GradeLevel, Question, Lecture, Exam, Homework, PaymentMethod, HonoredSt
 import { QuestionReviewEditor } from './QuestionReviewEditor';
 import { optimizeImageForAi } from '../utils/fileOptimizer';
 import { uploadFileWithRealProgress, probeVideoDuration } from '../utils/realUploader';
+import { SUPABASE_FILES_BUCKET, SUPABASE_LECTURES_BUCKET, uploadFileToSupabaseDirect } from '../utils/supabaseStorage';
 import { GeminiTeacherDashboard } from './GeminiTeacherDashboard';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient, resetAiConnection, parseScientificQuestionsLocally } from '../utils/aiClientService';
@@ -144,6 +145,7 @@ export const AdminPanelModal: React.FC = () => {
     updateTeacherProfile,
     lastAutoSavedAt,
     isAutoSaving,
+    activeGrade,
   } = usePlatform();
 
   // Strict Secret Section Security Check:
@@ -254,7 +256,7 @@ export const AdminPanelModal: React.FC = () => {
   // Video Form (from Local Device Files + Real High-Speed Multi-GB Uploader)
   const [videoTitle, setVideoTitle] = useState('');
   const [videoChapter, setVideoChapter] = useState('');
-  const [videoGrade, setVideoGrade] = useState<GradeLevel>('sec3');
+  const [videoGrade, setVideoGrade] = useState<GradeLevel>(activeGrade !== 'all' ? activeGrade : 'sec3');
   const [videoDuration, setVideoDuration] = useState('60');
   const [videoDurationFormatted, setVideoDurationFormatted] = useState('');
   const [videoPrice, setVideoPrice] = useState('50');
@@ -270,7 +272,20 @@ export const AdminPanelModal: React.FC = () => {
     instructions?: string;
     scheduleText?: string;
     lessons?: CourseLesson[];
+    draftLessons?: CourseLesson[];
   }>({});
+  const [isCreateCourseModalOpen, setIsCreateCourseModalOpen] = useState(false);
+  const [confirmDeleteCourseId, setConfirmDeleteCourseId] = useState<string | null>(null);
+  const [confirmDeleteFileId, setConfirmDeleteFileId] = useState<string | null>(null);
+  const [newCourseTitleInput, setNewCourseTitleInput] = useState('');
+  const [newCourseChapterInput, setNewCourseChapterInput] = useState('');
+  const [newCourseDescInput, setNewCourseDescInput] = useState('');
+  const [newCourseGradeInput, setNewCourseGradeInput] = useState<GradeLevel>(activeGrade !== 'all' ? activeGrade : 'sec3');
+  const [newCoursePriceInput, setNewCoursePriceInput] = useState('0');
+  const [newCourseIsFreeInput, setNewCourseIsFreeInput] = useState(true);
+  const [newCourseDurationInput, setNewCourseDurationInput] = useState('60');
+  const [newCourseCoverInput, setNewCourseCoverInput] = useState('');
+  const [isSavingNewCourse, setIsSavingNewCourse] = useState(false);
 
   // Teacher Profile Editing State
   const [profName, setProfName] = useState(teacherProfile?.name || 'مستر عمرو السيد');
@@ -301,7 +316,7 @@ export const AdminPanelModal: React.FC = () => {
   const [hwTitle, setHwTitle] = useState('');
   const [hwKind, setHwKind] = useState<'homework' | 'sheet'>('homework');
   const [hwLessonTitle, setHwLessonTitle] = useState('');
-  const [hwGrade, setHwGrade] = useState<GradeLevel>('sec3');
+  const [hwGrade, setHwGrade] = useState<GradeLevel>(activeGrade !== 'all' ? activeGrade : 'sec3');
   const [hwDesc, setHwDesc] = useState('');
   const [hwDeadline, setHwDeadline] = useState('');
   const [hwDuration, setHwDuration] = useState('1440');
@@ -338,7 +353,7 @@ export const AdminPanelModal: React.FC = () => {
   const [fileCategory, setFileCategory] = useState('مذكرات الشرح');
   const [fileLessonTitle, setFileLessonTitle] = useState('');
   const [fileCourseId, setFileCourseId] = useState('');
-  const [fileGrade, setFileGrade] = useState<GradeLevel>('sec3');
+  const [fileGrade, setFileGrade] = useState<GradeLevel>(activeGrade !== 'all' ? activeGrade : 'sec3');
   const [fileDesc, setFileDesc] = useState('');
   const [docFileObj, setDocFileObj] = useState<File | null>(null);
   const [docFileUrl, setDocFileUrl] = useState('');
@@ -347,7 +362,7 @@ export const AdminPanelModal: React.FC = () => {
   // Exam Form (Bulk up to 500 questions + Google Gemini AI extraction)
   const [examTitle, setExamTitle] = useState('');
   const [examLessonTitle, setExamLessonTitle] = useState('');
-  const [examGrade, setExamGrade] = useState<GradeLevel>('sec3');
+  const [examGrade, setExamGrade] = useState<GradeLevel>(activeGrade !== 'all' ? activeGrade : 'sec3');
   const [examDuration, setExamDuration] = useState('45');
   const [examMarks, setExamMarks] = useState('60');
   const [examQuestions, setExamQuestions] = useState<Question[]>([]);
@@ -607,9 +622,21 @@ export const AdminPanelModal: React.FC = () => {
     currentUser?.role === 'secretary' ||
     currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
+  useEffect(() => {
+    if (!isAdminPanelOpen || !isAuthorizedStaff) return;
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevBodyOverflow;
+      document.documentElement.style.overflow = prevHtmlOverflow;
+    };
+  }, [isAdminPanelOpen, isAuthorizedStaff]);
+
   if (!isAdminPanelOpen || !isAuthorizedStaff) return null;
 
-  // Real Video Upload & Duration Detection (reports exact duration, MB, speed, remaining time)
+  // Real Video Upload & Duration Detection (direct browser upload to Supabase Storage 'Lectures' bucket)
   const handleSelectVideoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -623,6 +650,7 @@ export const AdminPanelModal: React.FC = () => {
     }
 
     setVideoFileObj(file);
+    setVideoFileUrl('');
     if (!videoTitle) {
       setVideoTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
@@ -638,7 +666,7 @@ export const AdminPanelModal: React.FC = () => {
       console.warn('Video duration probe error:', err);
     }
 
-    // 2. Start Real Streaming Upload to Supabase Storage with live progress tracking
+    // 2. Direct upload to Supabase Storage ('Lectures' bucket) with live progress tracking
     const initialMb = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
     setVideoUploadProgress({
       isUploading: true,
@@ -649,7 +677,7 @@ export const AdminPanelModal: React.FC = () => {
       remainingTimeFormatted: 'جارِ الحساب...',
       fileName: file.name,
       fileSizeFormatted: initialMb,
-      statusText: 'جارِ نقل ورفع بيانات الفيديو إلى السحابة...',
+      statusText: 'جارِ الرفع المباشر إلى Supabase Storage (Lectures)...',
     });
 
     uploadFileWithRealProgress(
@@ -664,7 +692,7 @@ export const AdminPanelModal: React.FC = () => {
           remainingTimeFormatted: p.remaining,
           fileName: file.name,
           fileSizeFormatted: p.totalFormatted,
-          statusText: `جارِ الرفع الحقيقي: تم نقل ${p.loadedFormatted} من إجمالي ${p.totalFormatted}`,
+          statusText: `جارِ الرفع إلى Lectures: تم نقل ${p.loadedFormatted} من إجمالي ${p.totalFormatted}`,
         });
       },
       (res) => {
@@ -678,20 +706,22 @@ export const AdminPanelModal: React.FC = () => {
           remainingTimeFormatted: '0 ثانية',
           fileName: res.fileName,
           fileSizeFormatted: res.fileSize,
-          statusText: '✅ تم اكتمال رفع وحفظ الفيديو بشكل حقيقي تماماً على المنصة!',
+          statusText: `✅ ${res.diagnosticMessage}`,
         });
-        showNotice(`⚡ تم رفع ملف الفيديو (${file.name}) بنجاح كامل على السحابة وجاهز للبث المباشر فوراً!`);
+        showNotice(`⚡ ${res.diagnosticMessage} — جاهز للحفظ والبث المباشر!`);
       },
       (errMsg) => {
+        setVideoFileUrl('');
         setVideoUploadProgress((prev) =>
-          prev ? { ...prev, isUploading: false, statusText: `⚠️ خطأ في الرفع: ${errMsg}` } : null
+          prev ? { ...prev, isUploading: false, statusText: `❌ خطأ في الرفع: ${errMsg}` } : null
         );
-        showNotice(`فشل رفع الفيديو: ${errMsg}`);
-      }
+        showNotice(`❌ فشل رفع الفيديو إلى Supabase: ${errMsg}`);
+      },
+      SUPABASE_LECTURES_BUCKET
     );
   };
 
-  // Real Document Upload with live progress tracking
+  // Real Document Upload directly to Supabase Storage ('Files' bucket) with live progress tracking
   const handleSelectDocFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -705,6 +735,7 @@ export const AdminPanelModal: React.FC = () => {
     }
 
     setDocFileObj(file);
+    setDocFileUrl('');
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'xlsx' || ext === 'xls') setDocFileType('xls');
     else if (ext === 'docx' || ext === 'doc') setDocFileType('doc');
@@ -725,7 +756,7 @@ export const AdminPanelModal: React.FC = () => {
       remainingTimeFormatted: 'جارِ الحساب...',
       fileName: file.name,
       fileSizeFormatted: initialMb,
-      statusText: 'جارِ رفع المستند وحفظه في السحابة...',
+      statusText: 'جارِ الرفع المباشر إلى Supabase Storage (Files)...',
     });
 
     uploadFileWithRealProgress(
@@ -740,7 +771,7 @@ export const AdminPanelModal: React.FC = () => {
           remainingTimeFormatted: p.remaining,
           fileName: file.name,
           fileSizeFormatted: p.totalFormatted,
-          statusText: `جارِ نقل الملف: تم نقل ${p.loadedFormatted} من إجمالي ${p.totalFormatted}`,
+          statusText: `جارِ الرفع إلى Files: تم نقل ${p.loadedFormatted} من إجمالي ${p.totalFormatted}`,
         });
       },
       (res) => {
@@ -754,28 +785,41 @@ export const AdminPanelModal: React.FC = () => {
           remainingTimeFormatted: '0 ثانية',
           fileName: res.fileName,
           fileSizeFormatted: res.fileSize,
-          statusText: '✅ تم اكتمال رفع وحفظ الملف بشكل حقيقي تماماً!',
+          statusText: `✅ ${res.diagnosticMessage}`,
         });
-        showNotice(`⚡ تم حفظ وتجهيز الملف (${file.name}) بنجاح كامل على السحابة!`);
+        showNotice(`⚡ ${res.diagnosticMessage} — جاهز للحفظ!`);
       },
       (errMsg) => {
+        setDocFileUrl('');
         setDocUploadProgress((prev) =>
-          prev ? { ...prev, isUploading: false, statusText: `⚠️ خطأ: ${errMsg}` } : null
+          prev ? { ...prev, isUploading: false, statusText: `❌ خطأ في الرفع: ${errMsg}` } : null
         );
-        showNotice(`فشل رفع الملف: ${errMsg}`);
-      }
+        showNotice(`❌ فشل رفع الملف إلى Supabase: ${errMsg}`);
+      },
+      SUPABASE_FILES_BUCKET
     );
   };
 
-  // Helper to render live upload progress bar with duration & speed
+  // Helper to render live upload progress bar with duration, speed, diagnostics, and real error feedback
   const renderUploadProgressBar = (p: UploadProgressInfo | null, extraMeta?: string) => {
     if (!p) return null;
+    const isFailed = !p.isUploading && (p.statusText.includes('❌') || p.statusText.includes('⚠️') || p.progressPercent < 100);
     return (
-      <div className="p-3.5 bg-[#050c1e] border border-cyan-500/40 rounded-xl space-y-2.5 shadow-lg animate-fade-in">
+      <div
+        className={`p-3.5 bg-[#050c1e] rounded-xl space-y-2.5 shadow-lg animate-fade-in border ${
+          isFailed
+            ? 'border-rose-500/60'
+            : p.progressPercent === 100 && !p.isUploading
+            ? 'border-emerald-500/50'
+            : 'border-cyan-500/40'
+        }`}
+      >
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center gap-2">
             {p.isUploading ? (
               <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
+            ) : isFailed ? (
+              <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
             ) : (
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             )}
@@ -786,13 +830,17 @@ export const AdminPanelModal: React.FC = () => {
               {p.fileSizeFormatted}
             </span>
           </div>
-          <span className="font-mono font-bold text-xs text-cyan-400">{p.progressPercent}%</span>
+          <span className={`font-mono font-bold text-xs ${isFailed ? 'text-rose-400' : 'text-cyan-400'}`}>
+            {p.progressPercent}%
+          </span>
         </div>
 
         <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden border border-cyan-950 relative">
           <div
             className={`h-full transition-all duration-200 ${
-              p.progressPercent === 100
+              isFailed
+                ? 'bg-rose-500'
+                : p.progressPercent === 100
                 ? 'bg-gradient-to-r from-emerald-500 to-teal-400 shadow-md shadow-emerald-500/50'
                 : 'bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-500 shadow-md shadow-cyan-500/50'
             }`}
@@ -812,11 +860,27 @@ export const AdminPanelModal: React.FC = () => {
                 <Clock className="w-3 h-3 text-amber-400" />
                 <span>متبقي: {p.remainingTimeFormatted}</span>
               </>
+            ) : isFailed ? (
+              <span className="text-rose-400 font-bold">فشل الرفع إلى Supabase Storage</span>
             ) : (
-              <span className="text-emerald-400 font-bold">جاهز للبث والعرض المباشر ⚡</span>
+              <span className="text-emerald-400 font-bold">مرفوع على Supabase Storage ⚡</span>
             )}
           </div>
         </div>
+
+        {p.statusText && (
+          <div
+            className={`text-[11px] p-2 rounded-lg border font-semibold break-all ${
+              isFailed
+                ? 'bg-rose-950/40 border-rose-700/50 text-rose-200'
+                : p.progressPercent === 100 && !p.isUploading
+                ? 'bg-emerald-950/30 border-emerald-700/40 text-emerald-300'
+                : 'bg-cyan-950/30 border-cyan-800/40 text-cyan-200'
+            }`}
+          >
+            {p.statusText}
+          </div>
+        )}
 
         {extraMeta && (
           <div className="text-[11px] text-amber-300 bg-amber-950/30 p-2 rounded-lg border border-amber-800/30 font-semibold">
@@ -1148,11 +1212,12 @@ export const AdminPanelModal: React.FC = () => {
     }
   };
 
-  // Helper to handle local device homework file with resolution/clarity checks & PDF text extraction
+  // Helper to handle local device homework file: uploads directly to Supabase Storage ('Files') & prepares Gemini AI scan in memory only
   const handleSelectHwFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setHwFileObj(file);
+    setHwFileUrl('');
     setHwAttachedFile(file);
     setHwExtractedText('');
 
@@ -1166,47 +1231,61 @@ export const AdminPanelModal: React.FC = () => {
       setHwTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
 
-    const optimized = await optimizeImageForAi(file);
-    setHwFileUrl(optimized.dataUrl);
-    setHwAttachedDataUrl(optimized.dataUrl);
-    setHwAttachedMime(optimized.mimeType);
-    setHwExtractedText(optimized.extractedText || '');
+    const [optimizedRes, uploadRes] = await Promise.allSettled([
+      optimizeImageForAi(file),
+      uploadFileToSupabaseDirect(file, { bucket: SUPABASE_FILES_BUCKET }),
+    ]);
 
-    if (optimized.quality && !optimized.quality.isValid) {
-      const warnMsg =
-        optimized.quality.warning ||
-        'الصورة غير واضحة أو باهتة ولا تسمح بقراءة الأسئلة بدقة. يُرجى رفع صورة أوضح.';
-      showNotice(`⚠️ ${warnMsg}`);
+    if (uploadRes.status === 'fulfilled') {
+      setHwFileUrl(uploadRes.value.url);
+      showNotice(`📎 ${uploadRes.value.diagnosticMessage}`);
+    } else {
+      const errMsg = uploadRes.reason?.message || 'تعذر رفع ملف الواجب إلى Supabase Storage';
+      setHwFileUrl('');
+      showNotice(`❌ فشل رفع ملف الواجب: ${errMsg}`);
+    }
+
+    if (optimizedRes.status === 'fulfilled') {
+      const optimized = optimizedRes.value;
+      setHwAttachedDataUrl(optimized.dataUrl);
+      setHwAttachedMime(optimized.mimeType);
+      setHwExtractedText(optimized.extractedText || '');
+
+      if (optimized.quality && !optimized.quality.isValid) {
+        const warnMsg =
+          optimized.quality.warning ||
+          'الصورة غير واضحة أو باهتة ولا تسمح بقراءة الأسئلة بدقة. يُرجى رفع صورة أوضح.';
+        showNotice(`⚠️ ${warnMsg}`);
+        setHwChatMessages((prev) => [
+          ...prev,
+          {
+            id: `sys_${Date.now()}`,
+            sender: 'ai' as const,
+            text: `⚠️ تنبيه جودة الصورة للملف "${file.name}": ${warnMsg}`,
+            time: 'الآن',
+          },
+        ]);
+        return;
+      }
+
       setHwChatMessages((prev) => [
         ...prev,
         {
           id: `sys_${Date.now()}`,
           sender: 'ai' as const,
-          text: `⚠️ تنبيه جودة الصورة للملف "${file.name}": ${warnMsg}`,
+          text: `📎 تم إرفاق ملفك "${file.name}" بنجاح يا مستر عمرو${optimized.extractedText ? ' (مع قراءة طبقة النص تلقائياً لدقة 100%)' : ''}! وجّهني بما تريده أو اضغط على زر الاستخراج مباشرة.`,
           time: 'الآن',
         },
       ]);
-      return;
     }
-
-    showNotice(`📎 تم إرفاق (${file.name}) وفحص جودته بنجاح! جاهز للاستخراج الدقيق.`);
-
-    setHwChatMessages((prev) => [
-      ...prev,
-      {
-        id: `sys_${Date.now()}`,
-        sender: 'ai' as const,
-        text: `📎 تم إرفاق ملفك "${file.name}" بنجاح يا مستر عمرو${optimized.extractedText ? ' (مع قراءة طبقة النص تلقائياً لدقة 100%)' : ''}! وجّهني بما تريده أو اضغط على زر الاستخراج مباشرة.`,
-        time: 'الآن',
-      },
-    ]);
   };
 
-  // Helper to handle local device exam sheet/image with resolution/clarity checks & PDF text extraction
+  // Helper to handle local device exam sheet/image: uploads directly to Supabase Storage ('Files') & prepares Gemini AI scan in memory only
   const handleSelectExamFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setExamFileObj(file);
+    setExamFileUrl('');
     setExamAttachedFile(file);
     setExamExtractedText('');
 
@@ -1214,40 +1293,53 @@ export const AdminPanelModal: React.FC = () => {
       setExamTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
 
-    const optimized = await optimizeImageForAi(file);
-    setExamFileUrl(optimized.dataUrl);
-    setExamAttachedDataUrl(optimized.dataUrl);
-    setExamAttachedMime(optimized.mimeType);
-    setExamExtractedText(optimized.extractedText || '');
+    const [optimizedRes, uploadRes] = await Promise.allSettled([
+      optimizeImageForAi(file),
+      uploadFileToSupabaseDirect(file, { bucket: SUPABASE_FILES_BUCKET }),
+    ]);
 
-    if (optimized.quality && !optimized.quality.isValid) {
-      const warnMsg =
-        optimized.quality.warning ||
-        'الصورة غير واضحة أو باهتة ولا تسمح بقراءة الأسئلة بدقة. يُرجى رفع صورة أوضح.';
-      showNotice(`⚠️ ${warnMsg}`);
+    if (uploadRes.status === 'fulfilled') {
+      setExamFileUrl(uploadRes.value.url);
+      showNotice(`📎 ${uploadRes.value.diagnosticMessage}`);
+    } else {
+      const errMsg = uploadRes.reason?.message || 'تعذر رفع ملف الامتحان إلى Supabase Storage';
+      setExamFileUrl('');
+      showNotice(`❌ فشل رفع شيت الامتحان: ${errMsg}`);
+    }
+
+    if (optimizedRes.status === 'fulfilled') {
+      const optimized = optimizedRes.value;
+      setExamAttachedDataUrl(optimized.dataUrl);
+      setExamAttachedMime(optimized.mimeType);
+      setExamExtractedText(optimized.extractedText || '');
+
+      if (optimized.quality && !optimized.quality.isValid) {
+        const warnMsg =
+          optimized.quality.warning ||
+          'الصورة غير واضحة أو باهتة ولا تسمح بقراءة الأسئلة بدقة. يُرجى رفع صورة أوضح.';
+        showNotice(`⚠️ ${warnMsg}`);
+        setExamChatMessages((prev) => [
+          ...prev,
+          {
+            id: `sys_${Date.now()}`,
+            sender: 'ai' as const,
+            text: `⚠️ تنبيه جودة الصورة للملف "${file.name}": ${warnMsg}`,
+            time: 'الآن',
+          },
+        ]);
+        return;
+      }
+
       setExamChatMessages((prev) => [
         ...prev,
         {
           id: `sys_${Date.now()}`,
           sender: 'ai' as const,
-          text: `⚠️ تنبيه جودة الصورة للملف "${file.name}": ${warnMsg}`,
+          text: `📎 تم إرفاق شيت الامتحان "${file.name}" بنجاح يا مستر عمرو${optimized.extractedText ? ' (مع قراءة طبقة النص تلقائياً لدقة 100%)' : ''}! تفضل بتحديد توجيهاتك أو ابدأ الاستخراج فوراً.`,
           time: 'الآن',
         },
       ]);
-      return;
     }
-
-    showNotice(`📎 تم إرفاق شيت الامتحان (${file.name}) وفحص جودته بنجاح!`);
-
-    setExamChatMessages((prev) => [
-      ...prev,
-      {
-        id: `sys_${Date.now()}`,
-        sender: 'ai' as const,
-        text: `📎 تم إرفاق شيت الامتحان "${file.name}" بنجاح يا مستر عمرو${optimized.extractedText ? ' (مع قراءة طبقة النص تلقائياً لدقة 100%)' : ''}! تفضل بتحديد توجيهاتك أو ابدأ الاستخراج فوراً.`,
-        time: 'الآن',
-      },
-    ]);
   };
 
   const parseAndSetHwQuestions = (rawText: string) => {
@@ -1310,6 +1402,11 @@ export const AdminPanelModal: React.FC = () => {
       return;
     }
 
+    if (videoUploadProgress?.isUploading) {
+      showNotice('⏳ يرجى الانتظار حتى يكتمل رفع الفيديو إلى Supabase Storage أولاً.');
+      return;
+    }
+
     if (videoFileObj && videoFileObj.size > 50 * 1024 * 1024) {
       showNotice('⚠️ حجم الملف أكبر من 50 ميجابايت (الحد الأقصى للرفع المباشر). يُرجى استخدام خيار الإضافة بالرابط (YouTube) لتشغيل سلس وبدون استهلاك للمساحة.');
       return;
@@ -1318,12 +1415,19 @@ export const AdminPanelModal: React.FC = () => {
     let finalVideoUrl = videoFileUrl.trim();
     let finalDuration = Number(videoDuration) || 60;
     let finalFileSize = videoFileObj ? `${(videoFileObj.size / (1024 * 1024)).toFixed(1)} MB` : undefined;
-    let provider: 'youtube' | 'drive' | 'local' | 'other' = videoFileObj ? 'local' : 'youtube';
+    let provider: 'youtube' | 'drive' | 'local' | 'other' = videoFileObj ? 'other' : 'youtube';
     let external_id: string | undefined = undefined;
     let original_url: string | undefined = undefined;
 
-    // Check external YouTube or Google Drive video link with pure regex
-    if (finalVideoUrl && !videoFileObj) {
+    if (videoFileObj) {
+      if (!finalVideoUrl || !/^https?:\/\//i.test(finalVideoUrl)) {
+        showNotice('❌ لم يكتمل رفع الفيديو إلى Supabase Storage بنجاح. لا يمكن الحفظ بدون رابط مرفوع فعلياً.');
+        return;
+      }
+      provider = 'other';
+      original_url = finalVideoUrl;
+    } else if (finalVideoUrl) {
+      // Check external YouTube or Google Drive video link with pure regex
       const parsed = parseVideoUrl(finalVideoUrl);
       if (!parsed.isValid) {
         showNotice(parsed.error || '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب أو جوجل درايف صالح.');
@@ -1336,9 +1440,15 @@ export const AdminPanelModal: React.FC = () => {
       finalFileSize = parsed.provider === 'drive' ? 'Google Drive HD' : 'YouTube HD';
     }
 
-    const hasHierarchyLessons = Array.isArray(newCourseMeta.lessons) && newCourseMeta.lessons.length > 0;
-    if (!finalVideoUrl && !videoFileObj && !hasHierarchyLessons) {
-      showNotice('يرجى اختيار ملف فيديو أو إدخال رابط يوتيوب/جوجل درايف أو إضافة محاضرات داخل الكورس.');
+    const createdLessons =
+      Array.isArray(newCourseMeta.lessons) && newCourseMeta.lessons.length > 0
+        ? newCourseMeta.lessons
+        : Array.isArray(newCourseMeta.draftLessons) && newCourseMeta.draftLessons.length > 0
+        ? newCourseMeta.draftLessons
+        : [];
+    const hasHierarchyLessons = createdLessons.length > 0;
+    if (!finalVideoUrl && !hasHierarchyLessons) {
+      showNotice('يرجى اختيار ملف فيديو ورفعه لـ Supabase أو إدخال رابط يوتيوب/جوجل درايف أو إضافة محاضرات داخل الكورس.');
       return;
     }
 
@@ -1359,7 +1469,10 @@ export const AdminPanelModal: React.FC = () => {
         coverImageUrl: newCourseMeta.coverImageUrl,
         instructions: newCourseMeta.instructions,
         scheduleText: newCourseMeta.scheduleText,
-        lessons: hasHierarchyLessons ? newCourseMeta.lessons : undefined,
+        lessons: hasHierarchyLessons ? createdLessons : undefined,
+        draftLessons: hasHierarchyLessons ? createdLessons : undefined,
+        isPublished: true,
+        lastPublishedAt: new Date().toISOString(),
         price: isVideoFree ? 0 : (Number(videoPrice) || 50),
         isFree: isVideoFree,
         provider,
@@ -1378,6 +1491,7 @@ export const AdminPanelModal: React.FC = () => {
       setVideoChapter('');
       setVideoFileObj(null);
       setVideoFileUrl('');
+      setVideoUploadProgress(null);
       setVideoDesc('');
       setIsVideoFree(false);
       setNewCourseMeta({});
@@ -1386,6 +1500,60 @@ export const AdminPanelModal: React.FC = () => {
     } catch (err: any) {
       console.error('[AdminPanel AddLecture Exception]:', err);
       showNotice(`❌ خطأ غير متوقع: ${err?.message || err}`);
+    }
+  };
+
+  // Dedicated Create Course Modal Submission
+  const handleCreateDedicatedCourse = async (e: React.FormEvent, openEditorAfter = false) => {
+    e.preventDefault();
+    if (!newCourseTitleInput.trim()) {
+      showNotice('يرجى إدخال اسم الكورس أولاً.');
+      return;
+    }
+    setIsSavingNewCourse(true);
+    try {
+      const finalPrice = newCourseIsFreeInput ? 0 : Number(newCoursePriceInput) || 50;
+      const res = await addLecture({
+        title: newCourseTitleInput.trim(),
+        chapterTitle: newCourseChapterInput.trim() || 'كورس متكامل',
+        grade: newCourseGradeInput,
+        durationMinutes: Number(newCourseDurationInput) || 60,
+        videoUrl: '',
+        description: newCourseDescInput.trim(),
+        coverImageUrl: newCourseCoverInput.trim() || undefined,
+        lessons: [],
+        draftLessons: [],
+        isPublished: true,
+        lastPublishedAt: new Date().toISOString(),
+        price: finalPrice,
+        isFree: newCourseIsFreeInput || finalPrice === 0,
+        provider: 'other',
+      });
+      if (res && !res.success) {
+        showNotice(`❌ خطأ أثناء إنشاء الكورس: ${res.errorMessage || 'تعذر الحفظ'}`);
+        return;
+      }
+
+      const createdItem = res?.data;
+      setNewCourseTitleInput('');
+      setNewCourseChapterInput('');
+      setNewCourseDescInput('');
+      setNewCourseCoverInput('');
+      setNewCoursePriceInput('0');
+      setNewCourseIsFreeInput(true);
+      setIsCreateCourseModalOpen(false);
+      showNotice('✅ تم إنشاء الكورس الجديد بنجاح — يمكنك الآن إضافة الدروس والأقسام بداخله!');
+      if (openEditorAfter && createdItem) {
+        setEditingLecture({
+          ...createdItem,
+          lessons: Array.isArray(createdItem.lessons) ? createdItem.lessons : [],
+          draftLessons: Array.isArray(createdItem.draftLessons) ? createdItem.draftLessons : [],
+        });
+      }
+    } catch (err: any) {
+      showNotice(`❌ خطأ غير متوقع: ${err?.message || err}`);
+    } finally {
+      setIsSavingNewCourse(false);
     }
   };
 
@@ -1438,6 +1606,11 @@ export const AdminPanelModal: React.FC = () => {
       return;
     }
 
+    if (docUploadProgress?.isUploading) {
+      showNotice('⏳ يرجى الانتظار حتى يكتمل رفع الملف إلى Supabase Storage أولاً.');
+      return;
+    }
+
     if (docFileObj && docFileObj.size > 50 * 1024 * 1024) {
       showNotice('⚠️ حجم الملف أكبر من 50 ميجابايت (الحد الأقصى للرفع المباشر). يُرجى استخدام خيار الإضافة برابط Google Drive لعرض آمن وفوري.');
       return;
@@ -1445,12 +1618,19 @@ export const AdminPanelModal: React.FC = () => {
 
     let finalUrl = docFileUrl.trim();
     let finalSize = docFileObj ? Number((docFileObj.size / (1024 * 1024)).toFixed(2)) : 5.0;
-    let provider: 'youtube' | 'drive' | 'local' | 'other' = docFileObj ? 'local' : 'drive';
+    let provider: 'youtube' | 'drive' | 'local' | 'other' = docFileObj ? 'other' : 'drive';
     let external_id: string | undefined = undefined;
     let original_url: string | undefined = undefined;
 
-    // Check external Google Drive link with pure regex
-    if (finalUrl && !docFileObj) {
+    if (docFileObj) {
+      if (!finalUrl || !/^https?:\/\//i.test(finalUrl)) {
+        showNotice('❌ لم يكتمل رفع الملف إلى Supabase Storage بنجاح. لا يمكن الحفظ بدون رابط مرفوع فعلياً.');
+        return;
+      }
+      provider = 'other';
+      original_url = finalUrl;
+    } else if (finalUrl) {
+      // Check external Google Drive link with pure regex
       const parsed = parseDriveUrl(finalUrl);
       if (!parsed.isValid) {
         showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط Google Drive صالح (/file/d/ID أو ?id=ID أو /open?id=ID).');
@@ -1462,8 +1642,8 @@ export const AdminPanelModal: React.FC = () => {
       finalUrl = parsed.previewUrl;
     }
 
-    if (!finalUrl && !docFileObj) {
-      showNotice('يرجى اختيار ملف مذكرة أو إدخال رابط Google Drive صالح.');
+    if (!finalUrl) {
+      showNotice('يرجى اختيار ملف مذكرة ورفعه أو إدخال رابط Google Drive صالح.');
       return;
     }
 
@@ -1496,6 +1676,7 @@ export const AdminPanelModal: React.FC = () => {
       setFileCourseId('');
       setDocFileObj(null);
       setDocFileUrl('');
+      setDocUploadProgress(null);
       setFileDesc('');
       showNotice('⚡ تم حفظ المذكرة بنجاح في قاعدة البيانات Supabase!');
     } catch (err: any) {
@@ -1704,31 +1885,10 @@ export const AdminPanelModal: React.FC = () => {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  const uploadAudioBlobToServer = async (blob: Blob, fileName: string): Promise<string> => {
-    try {
-      const res = await fetch('/api/upload-file', {
-        method: 'POST',
-        headers: {
-          'x-file-name': encodeURIComponent(fileName),
-          'Content-Type': blob.type || 'audio/webm',
-        },
-        body: blob,
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json?.success && json?.url) {
-          return json.url;
-        }
-      }
-    } catch {
-      // Fallback to data URL below
-    }
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(new Error('تعذر قراءة الملف الصوتي'));
-      reader.readAsDataURL(blob);
-    });
+  const uploadAudioBlobToServer = async (blob: Blob, fileName: string): Promise<{ url: string; diagnosticMessage: string }> => {
+    const audioFile = blob instanceof File ? blob : new File([blob], fileName, { type: blob.type || 'audio/webm' });
+    const uploaded = await uploadFileToSupabaseDirect(audioFile, { bucket: SUPABASE_FILES_BUCKET });
+    return { url: uploaded.url, diagnosticMessage: uploaded.diagnosticMessage };
   };
 
   const handleStartVoiceRecording = async () => {
@@ -1778,11 +1938,13 @@ export const AdminPanelModal: React.FC = () => {
 
         setIsUploadingAudio(true);
         try {
-          const uploadedUrl = await uploadAudioBlobToServer(audioBlob, `voice_notif_${Date.now()}.${ext}`);
-          setRecordedAudioUrl(uploadedUrl);
+          const uploaded = await uploadAudioBlobToServer(audioBlob, `voice_notif_${Date.now()}.${ext}`);
+          setRecordedAudioUrl(uploaded.url);
           setRecordedAudioDuration(elapsedSecs);
-        } catch {
-          setVoiceRecorderError('حدث خطأ أثناء معالجة التسجيل الصوتي.');
+          showNotice(`⚡ ${uploaded.diagnosticMessage}`);
+        } catch (err: any) {
+          setRecordedAudioUrl(null);
+          setVoiceRecorderError(err?.message || 'حدث خطأ أثناء رفع التسجيل الصوتي إلى Supabase Storage.');
         } finally {
           setIsUploadingAudio(false);
         }
@@ -1810,17 +1972,19 @@ export const AdminPanelModal: React.FC = () => {
     setVoiceRecorderError(null);
     setIsUploadingAudio(true);
     try {
-      const uploadedUrl = await uploadAudioBlobToServer(file, file.name);
+      const uploaded = await uploadAudioBlobToServer(file, file.name);
       const audioEl = document.createElement('audio');
       audioEl.preload = 'metadata';
-      audioEl.src = uploadedUrl;
+      audioEl.src = uploaded.url;
       audioEl.onloadedmetadata = () => {
         const dur = Number.isFinite(audioEl.duration) ? Math.round(audioEl.duration) : 0;
         setRecordedAudioDuration(dur);
       };
-      setRecordedAudioUrl(uploadedUrl);
-    } catch {
-      setVoiceRecorderError('تعذر رفع الملف الصوتي.');
+      setRecordedAudioUrl(uploaded.url);
+      showNotice(`⚡ ${uploaded.diagnosticMessage}`);
+    } catch (err: any) {
+      setRecordedAudioUrl(null);
+      setVoiceRecorderError(err?.message || 'تعذر رفع الملف الصوتي إلى Supabase Storage.');
     } finally {
       setIsUploadingAudio(false);
     }
@@ -1891,27 +2055,33 @@ export const AdminPanelModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md">
-      <div className="bg-[#0b1429] border border-cyan-800/50 rounded-2xl w-full max-w-5xl h-[94dvh] overflow-hidden shadow-2xl flex flex-col text-slate-100">
+    <div
+      style={{ position: 'fixed', inset: 0, width: '100dvw', height: '100dvh' }}
+      className="z-50 bg-[#0b1429] flex flex-col overflow-hidden"
+    >
+      <div className="w-full h-full flex flex-col overflow-hidden text-slate-100">
         
-        {/* Top Bar */}
-        <div className="p-4 bg-[#080d1b] border-b border-cyan-900/40 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-500/15 text-amber-400 rounded-xl border border-amber-500/30">
+        {/* Top Bar (Full-Screen Admin Header with Close X on Top-Left) */}
+        <div
+          style={{ paddingTop: 'max(14px, env(safe-area-inset-top))' }}
+          className="px-4 sm:px-6 pb-3.5 bg-[#080d1b] border-b border-cyan-900/40 flex items-center justify-between gap-3 shrink-0"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-amber-500/15 text-amber-400 rounded-xl border border-amber-500/30 shrink-0">
               <Sliders className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="text-base sm:text-lg font-bold text-white">
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-lg font-bold text-white truncate">
                 لوحة تحكم المنصة - مستر عمرو السيد
               </h2>
-              <p className="text-[11px] text-cyan-400">
+              <p className="text-[11px] text-cyan-400 truncate">
                 إدارة كاملة، رفع من الجهاز بدون روابط، تعديل وحذف أي محتوى، أسئلة حتى 500+ سؤال، وتحكم شامل
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
               {isAutoSaving ? (
                 <>
                   <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
@@ -1930,10 +2100,14 @@ export const AdminPanelModal: React.FC = () => {
             </span>
 
             <button
+              type="button"
               onClick={() => setIsAdminPanelOpen(false)}
-              className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              aria-label="إغلاق لوحة التحكم"
+              title="إغلاق لوحة التحكم والعودة للصفحة الأساسية"
+              className="min-w-[44px] min-h-[44px] px-3 py-2 rounded-xl bg-red-600/20 hover:bg-red-600 border border-red-500/50 text-red-200 hover:text-white transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md"
             >
               <X className="w-5 h-5" />
+              <span className="hidden sm:inline text-xs font-bold">إغلاق</span>
             </button>
           </div>
         </div>
@@ -2837,6 +3011,27 @@ export const AdminPanelModal: React.FC = () => {
           {/* TAB 1: VIDEOS (UPLOAD FROM DEVICE DIRECTLY) */}
           {activeTab === 'videos' && (
             <div className="space-y-6">
+              {/* Top Course Management Quick Action Bar */}
+              <div className="p-4 rounded-xl bg-gradient-to-l from-cyan-950/60 to-[#080d1b] border border-cyan-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-cyan-400" />
+                    <span>إدارة الكورسات والمحاضرات والأقسام الديناميكية</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    أنشئ كورساً جديداً بالكامل أو أدِر الدروس والأقسام والعناصر المتعددة لكل كورس مع المسودة والنشر المخصص.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCreateCourseModalOpen(true)}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-extrabold text-xs flex items-center justify-center gap-2 cursor-pointer shrink-0 shadow-lg shadow-cyan-600/25"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>إضافة كورس جديد</span>
+                </button>
+              </div>
+
               <form noValidate onSubmit={handleAddVideo} className="bg-[#080d1b] border border-cyan-900/40 rounded-xl p-4 sm:p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -2879,15 +3074,19 @@ export const AdminPanelModal: React.FC = () => {
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <input
                       type="text"
-                      value={videoFileUrl.startsWith('/uploads/') ? '' : videoFileUrl}
+                      value={videoFileObj ? '' : videoFileUrl}
                       onChange={(e) => {
                         setVideoFileUrl(e.target.value);
                         if (e.target.value) setVideoFileObj(null);
                       }}
-                      placeholder="https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/.../view"
+                      placeholder={
+                        videoFileObj && videoFileUrl
+                          ? `تم الرفع إلى Supabase: ${videoFileUrl}`
+                          : 'https://www.youtube.com/watch?v=... أو https://drive.google.com/file/d/.../view'
+                      }
                       className="flex-1 bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                     />
-                    {videoFileUrl && !videoFileUrl.startsWith('/uploads/') && (
+                    {videoFileUrl && !videoFileObj && !/supabase\.co\/storage\/v1\/object\//i.test(videoFileUrl) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -3072,8 +3271,16 @@ export const AdminPanelModal: React.FC = () => {
                         instructions: newCourseMeta.instructions,
                         scheduleText: newCourseMeta.scheduleText,
                         lessons: newCourseMeta.lessons,
+                        draftLessons: newCourseMeta.draftLessons ?? newCourseMeta.lessons,
                       }}
-                      onChange={(patch) => setNewCourseMeta((prev) => ({ ...prev, ...patch }))}
+                      showPublishBar={false}
+                      onChange={(patch) =>
+                        setNewCourseMeta((prev) => ({
+                          ...prev,
+                          ...patch,
+                          lessons: patch.draftLessons ?? patch.lessons ?? prev.lessons,
+                        }))
+                      }
                     />
                   )}
                 </div>
@@ -3087,7 +3294,7 @@ export const AdminPanelModal: React.FC = () => {
                 </button>
               </form>
 
-              {/* Courses List with Hierarchical Curriculum Edit & Delete */}
+              {/* Courses List with Hierarchical Curriculum Edit & Confirmed Delete */}
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
                   جميع الكورسات والمحاضرات المضافة ({lectures.length})
@@ -3101,17 +3308,30 @@ export const AdminPanelModal: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {lectures.map((lec) => {
                       const lessonsCount = getCourseLessons(lec).length;
+                      const draftCount = Array.isArray(lec.draftLessons)
+                        ? lec.draftLessons.length
+                        : lessonsCount;
+                      const hasDraftDiff =
+                        Array.isArray(lec.draftLessons) &&
+                        JSON.stringify(lec.draftLessons) !== JSON.stringify(getCourseLessons(lec));
+                      const isConfirmingDelete = confirmDeleteCourseId === lec.id;
+
                       return (
                         <div
                           key={lec.id}
                           className="bg-[#080d1b] border border-slate-800 p-3.5 rounded-xl flex flex-col justify-between"
                         >
                           <div>
-                            <div className="flex items-center justify-between text-[11px] text-cyan-400 mb-1">
+                            <div className="flex items-center justify-between text-[11px] text-cyan-400 mb-1 gap-2 flex-wrap">
                               <span>{lec.chapterTitle}</span>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {hasDraftDiff && (
+                                  <span className="text-[10px] font-bold text-amber-300 bg-amber-950/60 border border-amber-700/40 px-1.5 py-0.5 rounded">
+                                    مسودة ({draftCount})
+                                  </span>
+                                )}
                                 <span className="text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded tabular-nums">
-                                  {lessonsCount} {lessonsCount === 1 ? 'محاضرة' : 'محاضرات'}
+                                  {lessonsCount} {lessonsCount === 1 ? 'درس منشور' : 'دروس منشورة'}
                                 </span>
                                 <span className="font-bold tabular-nums">{lec.price} ج.م</span>
                               </div>
@@ -3120,51 +3340,83 @@ export const AdminPanelModal: React.FC = () => {
                             <p className="text-[11px] text-slate-400 mt-1 line-clamp-2">{lec.description}</p>
                           </div>
 
-                          <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/60 gap-2">
+                          <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/60 gap-2 flex-wrap">
                             <button
                               type="button"
-                              onClick={() =>
+                              onClick={() => {
+                                const published = getCourseLessons(lec);
                                 setEditingLecture({
                                   ...lec,
-                                  lessons: getCourseLessons(lec),
-                                })
-                              }
-                              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-600 hover:text-white font-bold cursor-pointer transition-colors"
+                                  lessons: published,
+                                  draftLessons: Array.isArray(lec.draftLessons)
+                                    ? lec.draftLessons
+                                    : published,
+                                });
+                              }}
+                              className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-cyan-950/60 border border-cyan-700/40 text-cyan-300 hover:bg-cyan-600 hover:text-white font-bold cursor-pointer transition-colors"
                             >
                               <Layers className="w-3.5 h-3.5" />
-                              <span>إدارة المحاضرات والأقسام</span>
+                              <span>إدارة الدروس والأقسام</span>
                             </button>
 
                             <div className="flex items-center gap-1">
                               <button
                                 type="button"
                                 onClick={() => setActiveVideo(lec)}
-                                className="p-1 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
+                                className="p-1.5 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
                                 title="تشغيل سريع في المشغل"
                               >
                                 <Eye className="w-3.5 h-3.5" />
                               </button>
                               <button
                                 type="button"
-                                onClick={() =>
+                                onClick={() => {
+                                  const published = getCourseLessons(lec);
                                   setEditingLecture({
                                     ...lec,
-                                    lessons: getCourseLessons(lec),
-                                  })
-                                }
-                                className="p-1 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
+                                    lessons: published,
+                                    draftLessons: Array.isArray(lec.draftLessons)
+                                      ? lec.draftLessons
+                                      : published,
+                                  });
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
                                 title="تعديل الكورس بالكامل"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => deleteLecture(lec.id)}
-                                className="p-1 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
-                                title="حذف"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+
+                              {isConfirmingDelete ? (
+                                <div className="flex items-center gap-1 bg-red-950/80 border border-red-500/60 px-1.5 py-0.5 rounded-lg">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      deleteLecture(lec.id);
+                                      setConfirmDeleteCourseId(null);
+                                      showNotice('تم حذف الكورس بنجاح.');
+                                    }}
+                                    className="px-2 py-0.5 bg-red-600 text-white text-[10px] font-bold rounded cursor-pointer"
+                                  >
+                                    تأكيد الحذف
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteCourseId(null)}
+                                    className="px-1.5 py-0.5 bg-slate-800 text-slate-300 text-[10px] rounded cursor-pointer"
+                                  >
+                                    إلغاء
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteCourseId(lec.id)}
+                                  className="p-1.5 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
+                                  title="حذف الكورس"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -4126,15 +4378,19 @@ export const AdminPanelModal: React.FC = () => {
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <input
                       type="text"
-                      value={docFileUrl.startsWith('/uploads/') ? '' : docFileUrl}
+                      value={docFileObj ? '' : docFileUrl}
                       onChange={(e) => {
                         setDocFileUrl(e.target.value);
                         if (e.target.value) setDocFileObj(null);
                       }}
-                      placeholder="https://drive.google.com/file/d/.../view"
+                      placeholder={
+                        docFileObj && docFileUrl
+                          ? `تم الرفع إلى Supabase: ${docFileUrl}`
+                          : 'https://drive.google.com/file/d/.../view'
+                      }
                       className="flex-1 bg-[#080d1b] border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                     />
-                    {docFileUrl && !docFileUrl.startsWith('/uploads/') && (
+                    {docFileUrl && !docFileObj && !/supabase\.co\/storage\/v1\/object\//i.test(docFileUrl) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -4281,8 +4537,9 @@ export const AdminPanelModal: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <button
+                            type="button"
                             onClick={() =>
                               setActiveDocument({
                                 title: file.title,
@@ -4291,24 +4548,62 @@ export const AdminPanelModal: React.FC = () => {
                                 fileType: file.fileType,
                               })
                             }
-                            className="text-cyan-400 hover:text-cyan-300 font-semibold cursor-pointer"
+                            className="px-2.5 py-1 rounded-lg bg-cyan-950/70 border border-cyan-700/50 text-cyan-300 hover:text-white font-semibold cursor-pointer"
                           >
-                            فتح بالمشغل
+                            المشغل المدمج
                           </button>
                           <button
+                            type="button"
+                            onClick={() =>
+                              setActiveDocument({
+                                title: file.title,
+                                fileUrl: file.fileUrl,
+                                fileName: file.fileName,
+                                fileType: file.fileType,
+                              })
+                            }
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 hover:text-cyan-300 font-semibold cursor-pointer"
+                          >
+                            فتح على الويب
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setEditingFile(file)}
                             className="p-1 text-slate-400 hover:text-cyan-400 cursor-pointer transition-colors"
                             title="تعديل بيانات الملف"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            onClick={() => deleteFile(file.id)}
-                            className="p-1 text-slate-500 hover:text-red-400 cursor-pointer"
-                            title="حذف الملف"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {confirmDeleteFileId === file.id ? (
+                            <div className="flex items-center gap-1 bg-red-950/80 border border-red-500/60 px-1.5 py-0.5 rounded-lg">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  deleteFile(file.id);
+                                  setConfirmDeleteFileId(null);
+                                }}
+                                className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] font-bold rounded cursor-pointer"
+                              >
+                                حذف
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteFileId(null)}
+                                className="px-1 py-0.5 bg-slate-800 text-slate-300 text-[10px] rounded cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteFileId(file.id)}
+                              className="p-1 text-slate-500 hover:text-red-400 cursor-pointer"
+                              title="حذف الملف"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -7074,32 +7369,198 @@ ALTER TABLE public.recharge_codes DISABLE ROW LEVEL SECURITY;`;
               <div className="pt-2 border-t border-slate-800">
                 <CourseCurriculumManager
                   course={editingLecture}
-                  onChange={(patch) => setEditingLecture({ ...editingLecture, ...patch })}
+                  onChange={(patch) =>
+                    setEditingLecture((prev) => (prev ? { ...prev, ...patch } : prev))
+                  }
+                  onPublish={(publishedPatch) => {
+                    if (!editingLecture) return;
+                    const nextCourse = { ...editingLecture, ...publishedPatch };
+                    setEditingLecture(nextCourse);
+                    updateLecture(nextCourse.id, nextCourse);
+                    showNotice('⚡ تم حفظ ونشر التعديلات على المنصة وقاعدة البيانات بنجاح!');
+                  }}
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-cyan-900/40">
+            <div className="flex flex-wrap items-center justify-end gap-2.5 pt-3 border-t border-cyan-900/40">
               <button
                 type="button"
                 onClick={() => setEditingLecture(null)}
                 className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs cursor-pointer transition-colors"
               >
-                إلغاء
+                إغلاق
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  updateLecture(editingLecture.id, editingLecture);
+                  const lessonsToPublish = editingLecture.draftLessons ?? editingLecture.lessons ?? [];
+                  const publishedCourse = {
+                    ...editingLecture,
+                    lessons: lessonsToPublish,
+                    draftLessons: lessonsToPublish,
+                    isPublished: true,
+                    lastPublishedAt: new Date().toISOString(),
+                  };
+                  updateLecture(editingLecture.id, publishedCourse);
                   setEditingLecture(null);
-                  showNotice('⚡ تم حفظ تعديلات الكورس والمحاضرات والأقسام الفرعية بنجاح!');
+                  showNotice('⚡ تم حفظ ونشر الكورس وجميع المحاضرات على المنصة وقاعدة البيانات بنجاح!');
                 }}
                 className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer transition-colors flex items-center gap-1.5 shadow-md shadow-cyan-600/30"
               >
                 <Save className="w-4 h-4" />
-                <span>حفظ التعديلات</span>
+                <span>حفظ ونشر في الكورس وإغلاق</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* DEDICATED MODAL: CREATE NEW COURSE */}
+      {isCreateCourseModalOpen && (
+        <div
+          className="fixed inset-0 z-70 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in"
+          onClick={() => setIsCreateCourseModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#0b1329] border border-emerald-700/70 rounded-2xl w-full max-w-2xl max-h-[92dvh] overflow-y-auto p-5 text-slate-100 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="font-extrabold text-base text-white flex items-center gap-2">
+                <PlusCircle className="w-5 h-5 text-emerald-400" />
+                <span>إضافة كورس جديد للمنصة</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsCreateCourseModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form noValidate onSubmit={(e) => handleCreateDedicatedCourse(e, true)} className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">اسم الكورس *</label>
+                  <input
+                    type="text"
+                    required
+                    value={newCourseTitleInput}
+                    onChange={(e) => setNewCourseTitleInput(e.target.value)}
+                    placeholder="مثال: كورس الكيمياء العضوية المتكامل"
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">الباب / التصنيف</label>
+                  <input
+                    type="text"
+                    value={newCourseChapterInput}
+                    onChange={(e) => setNewCourseChapterInput(e.target.value)}
+                    placeholder="مثال: الباب الخامس — العضوية"
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">الصف الدراسي *</label>
+                  <select
+                    value={newCourseGradeInput}
+                    onChange={(e) => setNewCourseGradeInput(e.target.value as GradeLevel)}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400"
+                  >
+                    <option value="sec3">الصف الثالث الثانوي</option>
+                    <option value="sec2">الصف الثاني الثانوي</option>
+                    <option value="sec1">الصف الأول الثانوي</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">المدة التقديرية (دقيقة)</label>
+                  <input
+                    type="number"
+                    value={newCourseDurationInput}
+                    onChange={(e) => setNewCourseDurationInput(e.target.value)}
+                    className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400 text-left"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    {newCourseIsFreeInput ? 'السعر (مجاني)' : 'السعر (ج.م)'}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      disabled={newCourseIsFreeInput}
+                      value={newCourseIsFreeInput ? '0' : newCoursePriceInput}
+                      onChange={(e) => setNewCoursePriceInput(e.target.value)}
+                      className="flex-1 bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none text-left disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !newCourseIsFreeInput;
+                        setNewCourseIsFreeInput(next);
+                        if (!next && newCoursePriceInput === '0') setNewCoursePriceInput('50');
+                      }}
+                      className={`px-2.5 py-2 rounded-xl border font-bold cursor-pointer shrink-0 ${
+                        newCourseIsFreeInput
+                          ? 'bg-emerald-600 text-white border-emerald-500'
+                          : 'bg-amber-600 text-white border-amber-500'
+                      }`}
+                    >
+                      {newCourseIsFreeInput ? 'مجاني' : 'مدفوع'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">وصف الكورس</label>
+                <textarea
+                  rows={2}
+                  value={newCourseDescInput}
+                  onChange={(e) => setNewCourseDescInput(e.target.value)}
+                  placeholder="وصف مختصر لما سيتعلمه الطالب في هذا الكورس..."
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">صورة الغلاف (رابط اختياري)</label>
+                <input
+                  type="text"
+                  value={newCourseCoverInput}
+                  onChange={(e) => setNewCourseCoverInput(e.target.value)}
+                  placeholder="https://... (أو اتركه فارغاً لاستخدام غلاف المنصة التلقائي)"
+                  className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400 font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsCreateCourseModalOpen(false)}
+                  className="min-h-[42px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingNewCourse}
+                  className="min-h-[42px] px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-extrabold flex items-center gap-2 cursor-pointer shadow-lg"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>{isSavingNewCourse ? 'جاري الإنشاء...' : 'إنشاء الكورس وفتح محرر الدروس'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

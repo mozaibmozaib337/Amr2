@@ -1,9 +1,15 @@
 /**
- * Real Multi-Gigabyte File & 4K Video Uploader with Live Progress Tracking
- * Reports real-time uploaded bytes, total bytes, speed (MB/s), duration (min:sec), and estimated remaining time.
+ * Real Multi-Gigabyte File & Video Direct Supabase Storage Uploader with Live Progress Tracking.
+ * Strictly uploads directly from the browser to Supabase Storage ('Files' or 'Lectures').
+ * Never falls back to blob:, base64, localStorage, or proxy routes.
  */
 
-import { getSupabase } from '../services/supabaseService';
+import {
+  formatFileSize,
+  SupabaseBucketName,
+  SupabaseUploadResult,
+  uploadFileToSupabaseDirect,
+} from './supabaseStorage';
 
 export interface ProgressPayload {
   percent: number;
@@ -16,10 +22,7 @@ export interface ProgressPayload {
 }
 
 export function formatBytes(bytes: number): string {
-  if (isNaN(bytes) || bytes <= 0) return '0 B';
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
+  return formatFileSize(bytes);
 }
 
 export function formatSecondsToTime(totalSeconds: number): string {
@@ -55,10 +58,10 @@ export function probeVideoDuration(file: File): Promise<{ durationSeconds: numbe
   return new Promise((resolve) => {
     const video = document.createElement('video');
     video.preload = 'metadata';
-    const blobUrl = URL.createObjectURL(file);
+    const tempMetaUrl = URL.createObjectURL(file);
 
     video.onloadedmetadata = () => {
-      URL.revokeObjectURL(blobUrl);
+      URL.revokeObjectURL(tempMetaUrl);
       const secs = Math.round(video.duration);
       resolve({
         durationSeconds: secs,
@@ -67,110 +70,48 @@ export function probeVideoDuration(file: File): Promise<{ durationSeconds: numbe
     };
 
     video.onerror = () => {
-      URL.revokeObjectURL(blobUrl);
+      URL.revokeObjectURL(tempMetaUrl);
       resolve({
         durationSeconds: 3600,
         formatted: '60 دقيقة',
       });
     };
 
-    video.src = blobUrl;
+    video.src = tempMetaUrl;
   });
 }
 
 /**
- * Uploads any file directly via Supabase Storage or client blob with live progress tracking
- * Completely independent of any backend /api/upload-file server routes (100% Vercel Static Ready)
+ * Uploads any file or video directly from the browser to Supabase Storage ('Files' / 'Lectures').
  */
 export function uploadFileWithRealProgress(
   file: File,
   onProgress: (p: ProgressPayload) => void,
-  onSuccess: (data: { url: string; fileName: string; fileSize: string; sizeBytes: number }) => void,
-  onError: (errMsg: string) => void
+  onSuccess: (data: SupabaseUploadResult) => void,
+  onError: (errMsg: string) => void,
+  bucket?: SupabaseBucketName
 ): { abort: () => void } {
-  let isAborted = false;
+  const signal = { aborted: false };
 
-  const runUpload = async () => {
-    try {
-      onProgress({
-        percent: 25,
-        loadedFormatted: formatBytes(file.size * 0.25),
-        totalFormatted: formatBytes(file.size),
-        speed: 'اتصال مباشر',
-        remaining: 'ثوانٍ معدودة',
-        rawLoaded: file.size * 0.25,
-        rawTotal: file.size,
-      });
-
-      let publicUrl = '';
-
-      try {
-        const supabase = getSupabase();
-        if (supabase) {
-          const cleanExt = file.name.substring(file.name.lastIndexOf('.'));
-          const baseName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '_');
-          const safePath = `uploads/${Date.now()}_${baseName.slice(0, 40)}${cleanExt}`;
-
-          onProgress({
-            percent: 60,
-            loadedFormatted: formatBytes(file.size * 0.6),
-            totalFormatted: formatBytes(file.size),
-            speed: 'نقل سريع',
-            remaining: 'لحظات...',
-            rawLoaded: file.size * 0.6,
-            rawTotal: file.size,
-          });
-
-          const { data, error } = await supabase.storage
-            .from('platform-files')
-            .upload(safePath, file, { cacheControl: '3600', upsert: true });
-
-          if (!error && data?.path) {
-            const { data: urlData } = supabase.storage
-              .from('platform-files')
-              .getPublicUrl(data.path);
-            publicUrl = urlData.publicUrl;
-          }
-        }
-      } catch (err) {
-        console.warn('Direct Supabase storage upload attempt notice:', err);
+  uploadFileToSupabaseDirect(file, {
+    bucket,
+    onProgress,
+    signal,
+  })
+    .then((result) => {
+      if (!signal.aborted) {
+        onSuccess(result);
       }
-
-      if (isAborted) return;
-
-      if (!publicUrl) {
-        // Fallback to client blob URL
-        publicUrl = URL.createObjectURL(file);
+    })
+    .catch((err: any) => {
+      if (!signal.aborted) {
+        onError(err?.message || 'حدث خطأ أثناء الرفع إلى Supabase Storage.');
       }
-
-      onProgress({
-        percent: 100,
-        loadedFormatted: formatBytes(file.size),
-        totalFormatted: formatBytes(file.size),
-        speed: 'مكتمل',
-        remaining: '0 ثانية',
-        rawLoaded: file.size,
-        rawTotal: file.size,
-      });
-
-      onSuccess({
-        url: publicUrl,
-        fileName: file.name,
-        fileSize: formatBytes(file.size),
-        sizeBytes: file.size,
-      });
-    } catch (err: any) {
-      if (!isAborted) {
-        onError(err?.message || 'حدث خطأ أثناء معالجة الملف.');
-      }
-    }
-  };
-
-  runUpload();
+    });
 
   return {
     abort: () => {
-      isAborted = true;
+      signal.aborted = true;
     },
   };
 }

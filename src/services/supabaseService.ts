@@ -7,6 +7,22 @@ export const DEFAULT_SUPABASE_URL = 'https://drnpfyolgmkcarpsjvmn.supabase.co';
 export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_WkxrLhhy5TWPZ7lP8B-bxQ_GO7BrKLR';
 
 export function getActiveSupabaseCredentials(): { url: string; key: string } {
+  const envUrl =
+    typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL
+      ? String(import.meta.env.VITE_SUPABASE_URL).trim()
+      : '';
+  const envKey =
+    typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY
+      ? String(import.meta.env.VITE_SUPABASE_ANON_KEY).trim()
+      : '';
+
+  if (envUrl && envKey) {
+    return {
+      url: envUrl.replace(/\/rest\/v1\/?$/, ''),
+      key: envKey,
+    };
+  }
+
   try {
     const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('amr_chem_supabase_config') : null;
     if (stored) {
@@ -22,12 +38,9 @@ export function getActiveSupabaseCredentials(): { url: string; key: string } {
     // Ignore parse error
   }
 
-  const envUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
-  const envKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
-
   return {
-    url: String(envUrl).trim().replace(/\/rest\/v1\/?$/, ''),
-    key: String(envKey).trim(),
+    url: (envUrl || DEFAULT_SUPABASE_URL).replace(/\/rest\/v1\/?$/, ''),
+    key: envKey || DEFAULT_SUPABASE_ANON_KEY,
   };
 }
 
@@ -68,7 +81,7 @@ export function updateActiveSupabaseCredentials(newUrl: string, newKey: string, 
       JSON.stringify({
         supabaseUrl: cleanUrl,
         supabaseAnonKey: cleanKey,
-        bucketName: bucketName?.trim() || 'platform-files',
+        bucketName: bucketName?.trim() || 'Files',
       })
     );
     supabaseInstance = createClient(cleanUrl, cleanKey, {
@@ -231,6 +244,9 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       id: validId,
       title: String(data.title || ''),
       description: String(data.description || ''),
+      chapter_title: data.chapterTitle || data.chapter_title || undefined,
+      duration_minutes:
+        data.durationMinutes !== undefined ? Number(data.durationMinutes) : undefined,
       price: Number(data.price ?? 0),
       grade: String(data.grade || 'sec3'),
       video_url: String(data.videoUrl || data.video_url || ''),
@@ -241,6 +257,9 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       instructions: data.instructions || undefined,
       schedule_text: data.scheduleText || data.schedule_text || undefined,
       lessons: Array.isArray(data.lessons) ? data.lessons : undefined,
+      draft_lessons: Array.isArray(data.draftLessons) ? data.draftLessons : undefined,
+      is_published: data.isPublished !== undefined ? Boolean(data.isPublished) : undefined,
+      last_published_at: data.lastPublishedAt || undefined,
     };
   }
 
@@ -257,6 +276,10 @@ function mapPayloadForTable(tbl: string, collectionName: string, id: string, dat
       category: data.category || undefined,
       lesson_title: data.lessonTitle || data.lesson_title || undefined,
       course_id: data.courseId || data.course_id || undefined,
+      file_name: data.fileName || data.file_name || undefined,
+      file_type: data.fileType || data.file_type || undefined,
+      size_mb: data.sizeMb !== undefined ? Number(data.sizeMb) : undefined,
+      description: data.description || undefined,
     };
   }
 
@@ -469,6 +492,8 @@ function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
   if (tbl === 'courses') {
     if (partial.title !== undefined) out.title = String(partial.title);
     if (partial.description !== undefined) out.description = String(partial.description);
+    if (partial.chapterTitle !== undefined) out.chapter_title = String(partial.chapterTitle);
+    if (partial.durationMinutes !== undefined) out.duration_minutes = Number(partial.durationMinutes);
     if (partial.price !== undefined) out.price = Number(partial.price);
     if (partial.grade !== undefined) out.grade = String(partial.grade);
     if (partial.videoUrl !== undefined || partial.video_url !== undefined) {
@@ -481,6 +506,9 @@ function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
     if (partial.instructions !== undefined) out.instructions = partial.instructions;
     if (partial.scheduleText !== undefined) out.schedule_text = partial.scheduleText;
     if (partial.lessons !== undefined) out.lessons = partial.lessons;
+    if (partial.draftLessons !== undefined) out.draft_lessons = partial.draftLessons;
+    if (partial.isPublished !== undefined) out.is_published = Boolean(partial.isPublished);
+    if (partial.lastPublishedAt !== undefined) out.last_published_at = partial.lastPublishedAt;
     return out;
   }
 
@@ -494,6 +522,13 @@ function mapPartialForTable(tbl: string, partial: any): Record<string, any> {
     if (partial.provider !== undefined) out.provider = partial.provider;
     if (partial.external_id !== undefined) out.external_id = partial.external_id;
     if (partial.original_url !== undefined) out.original_url = partial.original_url;
+    if (partial.category !== undefined) out.category = partial.category;
+    if (partial.lessonTitle !== undefined) out.lesson_title = partial.lessonTitle;
+    if (partial.courseId !== undefined) out.course_id = partial.courseId;
+    if (partial.fileName !== undefined) out.file_name = partial.fileName;
+    if (partial.fileType !== undefined) out.file_type = partial.fileType;
+    if (partial.sizeMb !== undefined) out.size_mb = Number(partial.sizeMb);
+    if (partial.description !== undefined) out.description = partial.description;
     return out;
   }
 
@@ -610,7 +645,20 @@ export function mapRowFromTable(tbl: string, row: any, existing?: any): any {
       coverImageUrl: row.cover_image_url || row.coverImageUrl || base.coverImageUrl || undefined,
       instructions: row.instructions ?? base.instructions ?? undefined,
       scheduleText: row.schedule_text || row.scheduleText || base.scheduleText || undefined,
-      lessons: Array.isArray(row.lessons) && row.lessons.length > 0 ? row.lessons : base.lessons || undefined,
+      lessons: Array.isArray(row.lessons) ? row.lessons : base.lessons || undefined,
+      draftLessons: Array.isArray(row.draft_lessons)
+        ? row.draft_lessons
+        : Array.isArray(row.draftLessons)
+        ? row.draftLessons
+        : base.draftLessons || undefined,
+      isPublished:
+        row.is_published !== undefined
+          ? Boolean(row.is_published)
+          : row.isPublished !== undefined
+          ? Boolean(row.isPublished)
+          : base.isPublished,
+      lastPublishedAt:
+        row.last_published_at || row.lastPublishedAt || base.lastPublishedAt || undefined,
     };
   }
 

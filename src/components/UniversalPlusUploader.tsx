@@ -1,31 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { usePlatform } from '../context/PlatformContext';
 import { ProgressPayload } from '../utils/realUploader';
 import {
-  uploadToStorageWithFallback,
-  getStoredSupabaseConfig,
-  saveStoredSupabaseConfig,
-  SUPABASE_BUCKET_NAME,
+  SUPABASE_FILES_BUCKET,
+  SUPABASE_LECTURES_BUCKET,
+  uploadFileToSupabaseDirect,
 } from '../utils/supabaseStorage';
 import { GradeLevel } from '../types';
 import {
-  Upload,
   CheckCircle2,
   AlertCircle,
-  FileText,
-  Video,
-  FileSpreadsheet,
-  Image,
-  Sparkles,
   HardDrive,
-  RefreshCw,
   Plus,
   Cloud,
-  Settings,
-  Database,
-  ExternalLink,
-  ShieldCheck,
-  X,
 } from 'lucide-react';
 
 interface UniversalPlusUploaderProps {
@@ -35,6 +22,8 @@ interface UniversalPlusUploaderProps {
     fileSize: string;
     fileType: 'video' | 'pdf' | 'doc' | 'xls' | 'image' | 'other';
     storageProvider?: 'supabase' | 'server';
+    bucket?: string;
+    path?: string;
   }) => void;
   defaultCategory?: string;
   className?: string;
@@ -64,62 +53,25 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
     name: string;
     size: string;
     type: string;
-    provider?: string;
+    diagnosticMessage: string;
   } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Supabase Configuration Modal State
-  const [isConfigOpen, setIsConfigOpen] = useState(false);
-  const [supabaseUrl, setSupabaseUrl] = useState('');
-  const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
-  const [hasConfig, setHasConfig] = useState(false);
-
-  useEffect(() => {
-    const cfg = getStoredSupabaseConfig();
-    if (cfg) {
-      setSupabaseUrl(cfg.supabaseUrl);
-      setSupabaseAnonKey(cfg.supabaseAnonKey);
-      setHasConfig(true);
-    }
-  }, []);
-
-  const handleSaveConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
-      setErrorMessage('يرجى إدخال كلٍ من رابط مشروع Supabase والمفتاح Anon Key');
-      return;
-    }
-    saveStoredSupabaseConfig({
-      supabaseUrl: supabaseUrl.trim(),
-      supabaseAnonKey: supabaseAnonKey.trim(),
-      bucketName: SUPABASE_BUCKET_NAME,
-    });
-    setHasConfig(true);
-    setIsConfigOpen(false);
-    setErrorMessage(null);
-    setStatusMessage('تم حفظ وتفعيل ربط مساحة التخزين في Supabase (Bucket: platform-files) بنجاح!');
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     if (file.size > 50 * 1024 * 1024) {
       setErrorMessage(
-        `⚠️ حجم الملف (${(file.size / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى المسموح للرفع المباشر (50 ميجابايت). يُرجى استخدام خيار الإضافة بالرابط (YouTube للفيديوهات أو Google Drive للمذكرات) لتوفير المساحة وتشغيل سريع وفوري.`
+        `⚠️ حجم الملف (${(file.size / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى المسموح للرفع المباشر (50 ميجابايت). يُرجى استخدام خيار الإضافة بالرابط.`
       );
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
-    setCurrentFileName(file.name);
-    setIsUploading(true);
-    setErrorMessage(null);
-    setStatusMessage(`جاري رفع وحفظ (${file.name}) إلى مساحة التخزين الدائمة...`);
-
     const inferredType: 'video' | 'pdf' | 'doc' | 'xls' | 'image' | 'other' =
-      file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mkv|mov|avi)$/i)
+      file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mkv|mov|avi|m4v)$/i)
         ? 'video'
         : file.name.endsWith('.pdf') || file.type === 'application/pdf'
         ? 'pdf'
@@ -131,100 +83,117 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
         ? 'image'
         : 'other';
 
-    uploadToStorageWithFallback(
-      file,
-      (p) => {
-        setProgress(p);
-      },
-      (res) => {
-        setIsUploading(false);
-        setStatusMessage('تم الرفع والحفظ الدائم بنجاح!');
-        setLastUploaded({
-          url: res.url,
-          name: res.fileName,
-          size: res.fileSize,
-          type: inferredType,
-          provider: res.storageProvider === 'supabase' ? 'Supabase Storage (platform-files)' : 'السيرفر السحابي الدائم',
+    const targetBucket =
+      inferredType === 'video' ? SUPABASE_LECTURES_BUCKET : SUPABASE_FILES_BUCKET;
+
+    setCurrentFileName(file.name);
+    setIsUploading(true);
+    setErrorMessage(null);
+    setLastUploaded(null);
+    setStatusMessage(`جاري الرفع المباشر إلى Supabase (${targetBucket})...`);
+
+    try {
+      const uploaded = await uploadFileToSupabaseDirect(file, {
+        bucket: targetBucket,
+        onProgress: (p) => setProgress(p),
+      });
+
+      const gradeToUse: GradeLevel =
+        activeGrade !== 'all'
+          ? activeGrade
+          : currentUser?.grade || 'sec3';
+
+      if (inferredType === 'video') {
+        const dbRes = await addLecture({
+          title: file.name.replace(/\.[^/.]+$/, ''),
+          chapterTitle: 'محاضرات مرفوعة حديثاً',
+          grade: gradeToUse,
+          durationMinutes: 45,
+          videoUrl: uploaded.url,
+          videoFileName: uploaded.fileName,
+          videoFileSize: uploaded.fileSize,
+          description: `محاضرة فيديو مرفوعة بتاريخ ${new Date().toLocaleDateString('ar-EG')}`,
+          price: 0,
+          isFree: true,
+          provider: 'other',
+          original_url: uploaded.url,
         });
 
-        // Automatically persist into the correct collection in Firestore & platform
-        const gradeToUse: GradeLevel = currentUser?.grade ? currentUser.grade : (activeGrade === 'all' ? 'sec3' : activeGrade);
-
-        if (inferredType === 'video') {
-          addLecture({
-            title: file.name.replace(/\.[^/.]+$/, ''),
-            chapterTitle: 'محاضرات مرفوعة حديثاً',
-            grade: gradeToUse,
-            durationMinutes: 45,
-            videoUrl: res.url,
-            videoFileName: res.fileName,
-            videoFileSize: res.fileSize,
-            description: `محاضرة فيديو مرفوعة بتاريخ ${new Date().toLocaleDateString('ar-EG')}`,
-            price: 0,
-            isFree: true,
-          });
-        } else {
-          addFile({
-            title: file.name.replace(/\.[^/.]+$/, ''),
-            category: defaultCategory,
-            grade: gradeToUse,
-            fileUrl: res.url,
-            fileName: res.fileName,
-            fileType: inferredType as any,
-            sizeMb: parseFloat(res.fileSize.replace(' MB', '')) || 2,
-            description: `ملف مرفوع بتاريخ ${new Date().toLocaleDateString('ar-EG')}`,
-          });
+        if (dbRes && !dbRes.success) {
+          throw new Error(
+            dbRes.errorMessage || 'تم رفع الفيديو للتخزين لكن فشل حفظه في جدول الكورسات.'
+          );
         }
+      } else {
+        const dbRes = await addFile({
+          title: file.name.replace(/\.[^/.]+$/, ''),
+          category: defaultCategory,
+          grade: gradeToUse,
+          fileUrl: uploaded.url,
+          fileName: uploaded.fileName,
+          fileType: inferredType as any,
+          sizeMb: parseFloat(uploaded.fileSize.replace(' MB', '')) || 1,
+          description: `ملف مرفوع بتاريخ ${new Date().toLocaleDateString('ar-EG')}`,
+          provider: 'other',
+          original_url: uploaded.url,
+        });
 
-        if (onUploadComplete) {
-          onUploadComplete({
-            url: res.url,
-            fileName: res.fileName,
-            fileSize: res.fileSize,
-            fileType: inferredType,
-            storageProvider: res.storageProvider,
-          });
+        if (dbRes && !dbRes.success) {
+          throw new Error(
+            dbRes.errorMessage || 'تم رفع الملف للتخزين لكن فشل حفظه في جدول الملفات.'
+          );
         }
-
-        // Reset file input
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
-      },
-      (err) => {
-        setIsUploading(false);
-        setErrorMessage(err);
-        setStatusMessage(null);
       }
-    );
+
+      setIsUploading(false);
+      setStatusMessage(uploaded.diagnosticMessage);
+      setLastUploaded({
+        url: uploaded.url,
+        name: uploaded.fileName,
+        size: uploaded.fileSize,
+        type: inferredType,
+        diagnosticMessage: uploaded.diagnosticMessage,
+      });
+
+      if (onUploadComplete) {
+        onUploadComplete({
+          url: uploaded.url,
+          fileName: uploaded.fileName,
+          fileSize: uploaded.fileSize,
+          fileType: inferredType,
+          storageProvider: 'supabase',
+          bucket: uploaded.bucket,
+          path: uploaded.path,
+        });
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'فشل الرفع المباشر إلى Supabase Storage.';
+      console.error('[UniversalPlusUploader Error]:', err);
+      setIsUploading(false);
+      setErrorMessage(msg);
+      setStatusMessage(null);
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
   };
 
   return (
     <div className={`space-y-4 ${className}`}>
-      {/* Top Storage Status Badge & Config Toggle */}
       <div className="flex items-center justify-between gap-2 px-1 text-xs">
         <div className="flex items-center gap-1.5 text-cyan-300 font-semibold">
           <Cloud className="w-4 h-4 text-cyan-400" />
           <span>
-            {hasConfig ? 'مربوط بـ Supabase Storage (Bucket: platform-files)' : 'مساحة تخزين سحابية نشطة (Bucket: platform-files)'}
+            رفع مباشر إلى Supabase Storage (Files للملفات · Lectures للفيديوهات)
           </span>
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
         </div>
-
-        <button
-          type="button"
-          onClick={() => setIsConfigOpen(true)}
-          className="flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-medium border border-slate-700 cursor-pointer transition-colors"
-          title="إعدادات مفاتيح Supabase Storage"
-        >
-          <Settings className="w-3 h-3 text-cyan-400" />
-          <span>إعدادات Supabase</span>
-        </button>
       </div>
 
       {/* Interactive Plus Upload Area */}
       <div
-        onClick={() => fileInputRef.current?.click()}
+        onClick={() => !isUploading && fileInputRef.current?.click()}
         className="border-2 border-dashed border-cyan-700/60 hover:border-cyan-400 bg-[#091326] hover:bg-[#0c1830] rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all duration-200 group shadow-lg flex flex-col items-center justify-center gap-2 select-none"
       >
         <input
@@ -240,19 +209,19 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
         </div>
 
         <h4 className="text-sm sm:text-base font-bold text-white group-hover:text-cyan-300 transition-colors">
-          اضغط لرفع أي ملف أو فيديو للسيرفر الدائم (+)
+          اضغط لرفع أي ملف أو فيديو مباشرة إلى Supabase (+)
         </h4>
         <p className="text-xs text-slate-400 max-w-md leading-relaxed">
-          يدعم فيديوهات 4K، مذكرات PDF، شيتات إكسل Word، وصور الواجبات مع شريط تقدم ونسبة مئوية دقيقة % وحفظ دائم في قاعدة البيانات.
+          يرفع الفيديوهات إلى bucket (Lectures) والملفات والمذكرات إلى bucket (Files) مع شريط تقدم ونسبة مئوية % وحفظ فوري بالرابط العام.
         </p>
 
         <div className="flex items-center gap-2 text-[11px] text-cyan-400/90 font-medium mt-1">
           <HardDrive className="w-3.5 h-3.5" />
-          <span>تخزين سحابي مباشر ودائم دون انقطاع · روابط ثابتة للأبد</span>
+          <span>رفع مباشر من المتصفح · روابط Supabase دائمة</span>
         </div>
       </div>
 
-      {/* Real Live Progress Bar with % and transferred MB */}
+      {/* Real Live Progress Bar */}
       {isUploading && (
         <div className="p-4 bg-[#060b18] border border-cyan-800/60 rounded-2xl space-y-3 animate-fade-in shadow-xl">
           <div className="flex items-center justify-between text-xs">
@@ -264,7 +233,6 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
             </span>
           </div>
 
-          {/* Progress Track */}
           <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
             <div
               className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 rounded-full transition-all duration-200"
@@ -287,15 +255,15 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
         <div className="p-3.5 bg-emerald-950/70 border border-emerald-500/50 rounded-xl flex items-center justify-between gap-3 text-xs text-emerald-200 animate-fade-in">
           <div className="flex items-center gap-2 min-w-0">
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-            <div className="truncate">
+            <div className="min-w-0">
               <span className="font-bold text-white block truncate">{lastUploaded.name}</span>
-              <span className="text-[11px] text-emerald-300">
-                تم الرفع والحفظ الدائم بنجاح ({lastUploaded.size}) · {lastUploaded.provider}
+              <span className="text-[11px] text-emerald-300 block truncate">
+                {lastUploaded.diagnosticMessage} ({lastUploaded.size})
               </span>
             </div>
           </div>
           <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 font-bold text-[10px] shrink-0 border border-emerald-500/30">
-            جاهز ومحفوظ
+            تم الحفظ ⚡
           </span>
         </div>
       )}
@@ -304,88 +272,7 @@ export const UniversalPlusUploader: React.FC<UniversalPlusUploaderProps> = ({
       {errorMessage && (
         <div className="p-3.5 bg-red-950/70 border border-red-500/50 rounded-xl flex items-center gap-2 text-xs text-red-200">
           <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-          <span>{errorMessage}</span>
-        </div>
-      )}
-
-      {/* Supabase Storage Configuration Modal */}
-      {isConfigOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#091224] border-2 border-cyan-500/50 rounded-3xl p-6 sm:p-7 w-full max-w-lg space-y-4 shadow-2xl relative">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm">
-                <Database className="w-5 h-5" />
-                <span>إعدادات تخزين Supabase Storage (Bucket: {SUPABASE_BUCKET_NAME})</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsConfigOpen(false)}
-                className="p-1 text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              يمكنك ربط مشروع Supabase الخاص بك لحفظ روابط الفيديوهات وملفات الـ PDF والصور بشكل دائم في الـ Bucket المسمى <code className="text-cyan-300 font-mono bg-cyan-950 px-1.5 py-0.5 rounded">platform-files</code>:
-            </p>
-
-            <form onSubmit={handleSaveConfig} className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-300 block">
-                  رابط مشروع Supabase (Project URL):
-                </label>
-                <input
-                  type="url"
-                  value={supabaseUrl}
-                  onChange={(e) => setSupabaseUrl(e.target.value)}
-                  placeholder="https://xyzcompany.supabase.co"
-                  className="w-full p-2.5 bg-[#050811] border border-slate-700 focus:border-cyan-400 rounded-xl text-xs text-white font-mono focus:outline-none"
-                  required
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-300 block">
-                  المفتاح العام (anon / public Key):
-                </label>
-                <textarea
-                  rows={3}
-                  value={supabaseAnonKey}
-                  onChange={(e) => setSupabaseAnonKey(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  className="w-full p-2.5 bg-[#050811] border border-slate-700 focus:border-cyan-400 rounded-xl text-xs text-white font-mono focus:outline-none"
-                  required
-                />
-              </div>
-
-              <div className="p-3 bg-cyan-950/40 border border-cyan-800/50 rounded-xl text-[11px] text-cyan-200/90 space-y-1">
-                <div className="flex items-center gap-1 font-bold text-cyan-300">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>ملاحظة أمان وتوافق:</span>
-                </div>
-                <p>
-                  يتم حفظ المفاتيح محلياً على جهازك، وفي حال عدم إدخالها يعمل النظام تلقائياً عبر السيرفر السحابي الدائم ويحفظ روابط الملفات في Cloud Firestore للأبد.
-                </p>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsConfigOpen(false)}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md"
-                >
-                  حفظ وتفعيل التخزين الدائم
-                </button>
-              </div>
-            </form>
-          </div>
+          <span className="break-all">{errorMessage}</span>
         </div>
       )}
     </div>

@@ -87,7 +87,22 @@ export interface VideoChapter {
   timeSeconds: number;
 }
 
-export type LessonSectionKind = 'video' | 'pdf' | 'homework' | 'exam' | 'link';
+export type LessonSectionKind = 'video' | 'pdf' | 'homework' | 'exam' | 'link' | 'text';
+
+export interface LessonSectionItem {
+  id: string;
+  title: string;
+  kind: LessonSectionKind;
+  videoUrl?: string;
+  fileUrl?: string;
+  fileName?: string;
+  linkedExamId?: string;
+  linkedHomeworkId?: string;
+  externalUrl?: string;
+  textContent?: string;
+  notes?: string;
+  order?: number;
+}
 
 export interface LessonSubSection {
   id: string;
@@ -99,7 +114,10 @@ export interface LessonSubSection {
   linkedExamId?: string;
   linkedHomeworkId?: string;
   externalUrl?: string;
+  textContent?: string;
   notes?: string;
+  order?: number;
+  items?: LessonSectionItem[];
   isDefault?: boolean;
 }
 
@@ -127,6 +145,9 @@ export interface Lecture {
   instructions?: string;
   scheduleText?: string;
   lessons?: CourseLesson[];
+  draftLessons?: CourseLesson[];
+  isPublished?: boolean;
+  lastPublishedAt?: string;
   price: number;
   isFree?: boolean;
   dateAdded: string;

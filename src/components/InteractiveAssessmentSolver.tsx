@@ -19,6 +19,12 @@ import {
   FileText,
   Eraser,
 } from 'lucide-react';
+import {
+  enterElementFullscreen,
+  exitAnyFullscreen,
+  getAnyFullscreenElement,
+  subscribeFullscreenChange,
+} from '../utils/fullscreen';
 
 export interface AssessmentConfig {
   id: string;
@@ -329,15 +335,41 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startedAt, windowMs, isFinished]);
 
-  const toggleSolverFullscreen = () => {
-    setIsSolverFullscreen((prev) => !prev);
-    try {
-      if (!document.fullscreenElement) {
-        solverContainerRef.current?.requestFullscreen?.().catch(() => {});
-      } else {
-        document.exitFullscreen?.().catch(() => {});
+  const isCssFallbackFsRef = useRef(false);
+
+  useEffect(() => {
+    return subscribeFullscreenChange((nativeActive) => {
+      if (nativeActive) {
+        isCssFallbackFsRef.current = false;
+        setIsSolverFullscreen(true);
+      } else if (!isCssFallbackFsRef.current) {
+        setIsSolverFullscreen(false);
       }
-    } catch {}
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isSolverFullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isSolverFullscreen]);
+
+  const toggleSolverFullscreen = async () => {
+    if (isSolverFullscreen || getAnyFullscreenElement()) {
+      isCssFallbackFsRef.current = false;
+      await exitAnyFullscreen();
+      setIsSolverFullscreen(false);
+      return;
+    }
+
+    const mode = await enterElementFullscreen(solverContainerRef.current, {
+      lockLandscape: true,
+    });
+    isCssFallbackFsRef.current = mode === 'css';
+    setIsSolverFullscreen(true);
   };
 
   const modeLabel =
@@ -399,7 +431,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
       ref={solverContainerRef}
       className={`${
         isSolverFullscreen
-          ? 'fixed inset-0 z-50 p-4 sm:p-8 bg-[#070d1e] overflow-y-auto space-y-5'
+          ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] p-4 sm:p-8 bg-[#070d1e] overflow-y-auto space-y-5'
           : 'bg-[#091224] border border-cyan-800/40 rounded-2xl p-4 sm:p-7 space-y-5 shadow-xl'
       } transition-all`}
     >
@@ -429,7 +461,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
         <div className="flex items-center gap-2 flex-wrap">
           {!isFinished && (
             <div
-              className={`px-3 py-1.5 rounded-xl border text-xs font-mono font-bold tabular-nums flex items-center gap-1.5 ${
+              className={`min-h-[44px] sm:min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-mono font-bold tabular-nums flex items-center gap-1.5 ${
                 remainingSeconds < 300
                   ? 'bg-red-500/20 border-red-500/50 text-red-300 animate-pulse'
                   : 'bg-[#060b18] border-cyan-800/60 text-cyan-300'
@@ -451,7 +483,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
                   fileType: assessment.fileType,
                 })
               }
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[44px] sm:min-h-[36px] flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
             >
               <FileText className="w-3.5 h-3.5 text-cyan-400" />
               <span>ملف الشيت المرفق</span>
@@ -461,9 +493,9 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
           <button
             type="button"
             onClick={toggleSolverFullscreen}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0e1c38] hover:bg-[#13274e] border border-cyan-700/60 text-cyan-300 rounded-xl text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+            className="min-h-[44px] sm:min-h-[36px] flex items-center gap-1.5 px-3.5 py-1.5 bg-[#0e1c38] hover:bg-[#13274e] border border-cyan-700/60 text-cyan-300 rounded-xl text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
           >
-            {isSolverFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            {isSolverFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             <span>{isSolverFullscreen ? 'تصغير' : 'ملء الشاشة'}</span>
           </button>
 
@@ -471,7 +503,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
             <button
               type="button"
               onClick={() => setShowFinishSummary(true)}
-              className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-extrabold shadow-md cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[44px] sm:min-h-[36px] flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-extrabold shadow-md cursor-pointer whitespace-nowrap shrink-0"
             >
               <Flag className="w-3.5 h-3.5" />
               <span>إنهاء {modeLabel}</span>
@@ -480,8 +512,15 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
 
           <button
             type="button"
-            onClick={onClose}
-            className="flex items-center gap-1 text-xs text-slate-300 hover:text-white px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-xl cursor-pointer whitespace-nowrap shrink-0"
+            onClick={() => {
+              if (isSolverFullscreen) {
+                isCssFallbackFsRef.current = false;
+                void exitAnyFullscreen();
+                setIsSolverFullscreen(false);
+              }
+              onClose();
+            }}
+            className="min-h-[44px] sm:min-h-[36px] flex items-center gap-1 text-xs text-slate-300 hover:text-white px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-xl cursor-pointer whitespace-nowrap shrink-0"
             title={assessment.mode === 'homework' && !isFinished ? 'يُحفظ تقدمك تلقائياً للاستكمال خلال 24 ساعة' : 'الخروج'}
           >
             <LogOut className="w-3.5 h-3.5" />
@@ -625,7 +664,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
                       </span>
                     </div>
 
-                    <p className="text-sm sm:text-base font-bold text-white leading-relaxed whitespace-pre-wrap">
+                    <p className="text-sm sm:text-base font-bold text-white leading-relaxed whitespace-pre-wrap break-words">
                       {q.text}
                     </p>
 
@@ -699,13 +738,13 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
                                 [q.id]: idx,
                               }))
                             }
-                            className={`w-full text-right p-3.5 rounded-xl border text-xs sm:text-sm font-medium transition-all flex items-center justify-between cursor-pointer ${
+                            className={`w-full min-h-[44px] text-right p-3.5 rounded-xl border text-xs sm:text-sm font-medium transition-all flex items-center justify-between gap-3 cursor-pointer ${
                               isSelected
                                 ? 'bg-emerald-500/15 border-emerald-400 text-emerald-200 shadow-sm'
                                 : 'bg-[#080d1b] border-slate-800 text-slate-300 hover:border-slate-700'
                             }`}
                           >
-                            <span>{opt}</span>
+                            <span className="break-words min-w-0 text-right">{opt}</span>
                             <div
                               className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
                                 isSelected ? 'border-emerald-400 bg-emerald-400' : 'border-slate-600'
@@ -725,7 +764,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
                       type="button"
                       disabled={currentQuestionIndex === 0}
                       onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
-                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                      className="min-h-[44px] sm:min-h-[38px] px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
                     >
                       <ArrowRight className="w-4 h-4" />
                       <span>السابق</span>
@@ -738,7 +777,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
                           onClick={() =>
                             setCurrentQuestionIndex((prev) => Math.min(assessment.questions.length - 1, prev + 1))
                           }
-                          className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md whitespace-nowrap shrink-0"
+                          className="min-h-[44px] sm:min-h-[38px] px-5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md whitespace-nowrap shrink-0"
                         >
                           <span>التالي</span>
                           <ArrowLeft className="w-4 h-4" />
@@ -747,7 +786,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
                         <button
                           type="button"
                           onClick={() => setShowFinishSummary(true)}
-                          className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-extrabold shadow-md cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                          className="min-h-[44px] sm:min-h-[38px] px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-extrabold shadow-md cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
                         >
                           <Flag className="w-4 h-4" />
                           <span>إنهاء ومراجعة التسليم</span>
@@ -967,7 +1006,7 @@ export const InteractiveAssessmentSolver: React.FC<InteractiveAssessmentSolverPr
               <button
                 type="button"
                 onClick={onClose}
-                className="px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl shadow-lg cursor-pointer"
+                className="min-h-[44px] sm:min-h-[38px] px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl shadow-lg cursor-pointer"
               >
                 العودة إلى القائمة
               </button>
