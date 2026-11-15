@@ -30,6 +30,12 @@ import {
   getAnyFullscreenElement,
   subscribeFullscreenChange,
 } from '../utils/fullscreen';
+import {
+  cleanupVideoElement,
+  clearMediaSession,
+  pauseAllOtherVideos,
+  setActiveMediaSession,
+} from '../utils/mediaSession';
 
 declare global {
   interface Window {
@@ -75,6 +81,8 @@ export const VideoPlayerModal: React.FC = () => {
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const seekbarRef = useRef<HTMLDivElement>(null);
   const hideControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedTimeRef = useRef<number>(0);
+  const wasUnloadedRef = useRef<boolean>(false);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
@@ -185,28 +193,59 @@ export const VideoPlayerModal: React.FC = () => {
     }
   }, []);
 
-  // Pause video when tab visibility changes (e.g. user switches tabs)
+  // Pause & unload video + clear MediaSession when backgrounded, hidden, closed, or unmounted
+  const stopAndUnloadModalMedia = useCallback(
+    (preservePosition: boolean) => {
+      if (isPlayerReadyRef.current && ytPlayerRef.current?.pauseVideo) {
+        try {
+          ytPlayerRef.current.pauseVideo();
+          if (!preservePosition) ytPlayerRef.current.stopVideo?.();
+        } catch {}
+      } else {
+        sendIframeCommand(preservePosition ? 'pauseVideo' : 'stopVideo');
+      }
+      const video = videoRef.current;
+      if (video) {
+        if (preservePosition && Number.isFinite(video.currentTime) && video.currentTime > 0) {
+          savedTimeRef.current = video.currentTime;
+        } else if (!preservePosition) {
+          savedTimeRef.current = 0;
+        }
+        cleanupVideoElement(video);
+        wasUnloadedRef.current = preservePosition;
+      }
+      clearMediaSession();
+      setIsPlaying(false);
+    },
+    [sendIframeCommand]
+  );
+
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.hidden && isPlaying) {
-        if (isPlayerReadyRef.current && ytPlayerRef.current?.pauseVideo) {
-          ytPlayerRef.current.pauseVideo();
-        } else {
-          sendIframeCommand('pauseVideo');
-        }
-        if (videoRef.current) {
-          videoRef.current.pause();
-        }
-        setIsPlaying(false);
+      if (document.hidden) {
+        stopAndUnloadModalMedia(true);
       }
     };
+    const handlePageHide = () => {
+      stopAndUnloadModalMedia(true);
+    };
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isPlaying, sendIframeCommand]);
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      stopAndUnloadModalMedia(false);
+    };
+  }, [stopAndUnloadModalMedia]);
 
   // Resolve video source
   useEffect(() => {
+    savedTimeRef.current = 0;
+    wasUnloadedRef.current = false;
+
     if (!activeVideo) {
+      cleanupVideoElement(videoRef.current);
+      clearMediaSession();
       setResolvedSrc('');
       setDuration(0);
       setVideoLoadError(null);
@@ -266,11 +305,13 @@ export const VideoPlayerModal: React.FC = () => {
 
     return () => {
       isSubscribed = false;
+      cleanupVideoElement(videoRef.current);
+      clearMediaSession();
     };
   }, [activeVideo]);
 
   // Determine media type
-  const targetUrl = resolvedSrc || activeVideo?.videoUrl || '';
+  const targetUrl = (resolvedSrc || activeVideo?.videoUrl || '').replace(/([?&])autoplay=1/gi, '$1autoplay=0');
   const parsedYouTube = parseYouTubeUrl(targetUrl);
   const isYouTube = parsedYouTube.isValid;
   const youtubeVideoId = parsedYouTube.isValid ? parsedYouTube.external_id : '';
@@ -363,15 +404,26 @@ export const VideoPlayerModal: React.FC = () => {
             const endedCode = window.YT?.PlayerState?.ENDED ?? 0;
 
             if (event.data === playingCode) {
+              pauseAllOtherVideos(null);
               setIsPlaying(true);
               setIsEnded(false);
+              setActiveMediaSession({
+                title: activeVideo.title,
+                artist: 'الأستاذ عمرو السيد',
+                onPause: () => {
+                  ytPlayerRef.current?.pauseVideo?.();
+                },
+                onStop: () => stopAndUnloadModalMedia(false),
+              });
               startPolling();
             } else if (event.data === pausedCode) {
               setIsPlaying(false);
+              clearMediaSession();
               stopPolling();
             } else if (event.data === endedCode) {
               setIsPlaying(false);
               setIsEnded(true);
+              clearMediaSession();
               stopPolling();
             }
           },
@@ -517,8 +569,10 @@ export const VideoPlayerModal: React.FC = () => {
         } else {
           sendIframeCommand('pauseVideo');
         }
+        clearMediaSession();
         setIsPlaying(false);
       } else {
+        pauseAllOtherVideos(null);
         if (isEnded) {
           if (isPlayerReadyRef.current && ytPlayerRef.current?.seekTo) {
             ytPlayerRef.current.seekTo(0, true);
@@ -538,16 +592,34 @@ export const VideoPlayerModal: React.FC = () => {
       return;
     }
 
-    if (!videoRef.current) return;
+    const video = videoRef.current;
+    if (!video) return;
     if (isPlaying) {
-      videoRef.current.pause();
+      video.pause();
+      clearMediaSession();
       setIsPlaying(false);
     } else {
-      if (isEnded) {
-        videoRef.current.currentTime = 0;
+      pauseAllOtherVideos(video);
+      if (wasUnloadedRef.current || !video.getAttribute('src')) {
+        video.setAttribute('src', targetUrl);
+        video.load();
+        wasUnloadedRef.current = false;
+        const restorePos = savedTimeRef.current;
+        if (restorePos > 0) {
+          const seekOnReady = () => {
+            try {
+              video.currentTime = restorePos;
+            } catch {}
+            video.removeEventListener('loadedmetadata', seekOnReady);
+          };
+          video.addEventListener('loadedmetadata', seekOnReady);
+        }
+      } else if (isEnded) {
+        video.currentTime = 0;
+        savedTimeRef.current = 0;
         setIsEnded(false);
       }
-      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+      video.play().then(() => setIsPlaying(true)).catch(() => {});
     }
     resetControlsTimer();
   };
@@ -708,6 +780,7 @@ export const VideoPlayerModal: React.FC = () => {
   };
 
   const handleClosePlayer = async () => {
+    stopAndUnloadModalMedia(false);
     if (isFullscreen || getAnyFullscreenElement()) {
       isCssFallbackFsRef.current = false;
       await exitAnyFullscreen();
@@ -766,9 +839,9 @@ export const VideoPlayerModal: React.FC = () => {
       ? 'w-full h-full'
       : 'w-full aspect-video max-h-full max-w-[177.78dvh]';
 
-  // YouTube embed URL with strict parameters (no captions, no controls, Arabic locale, minimal branding)
+  // YouTube embed URL with strict parameters (no autoplay, no captions, no controls, Arabic locale, minimal branding)
   const ytEmbedSrc = parsedYouTube && parsedYouTube.external_id
-    ? `https://www.youtube-nocookie.com/embed/${parsedYouTube.external_id}?enablejsapi=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&cc_load_policy=0&hl=ar&disablekb=1&fs=0&playsinline=1&origin=${encodeURIComponent(typeof window !== 'undefined' ? window.location.origin : '')}`
+    ? `https://www.youtube-nocookie.com/embed/${parsedYouTube.external_id}?autoplay=0&enablejsapi=1&controls=0&modestbranding=1&rel=0&iv_load_policy=3&cc_load_policy=0&hl=ar&disablekb=1&fs=0&playsinline=1&origin=${encodeURIComponent(typeof window !== 'undefined' ? window.location.origin : '')}`
     : '';
 
   const studentDisplayIdentifier = currentUser?.phone
@@ -889,7 +962,7 @@ export const VideoPlayerModal: React.FC = () => {
                 title={activeVideo.title}
                 style={{ transform: 'none' }}
                 className="absolute top-0 left-0 w-full h-full border-0 object-cover select-none pointer-events-none"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 allowFullScreen
               />
 
@@ -909,7 +982,7 @@ export const VideoPlayerModal: React.FC = () => {
                 width="100%"
                 height="100%"
                 frameBorder="0"
-                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                allow="encrypted-media; fullscreen; picture-in-picture"
                 allowFullScreen
                 className="absolute top-0 left-0 w-full h-full border-0"
               />
@@ -929,7 +1002,7 @@ export const VideoPlayerModal: React.FC = () => {
               <video
                 id="myCustomVideo"
                 ref={videoRef}
-                src={resolvedSrc || activeVideo.videoUrl}
+                src={targetUrl}
                 playsInline
                 {...({ 'webkit-playsinline': 'true', 'x5-playsinline': 'true' } as Record<string, string>)}
                 controlsList="nodownload noplaybackrate nofullscreen"
@@ -949,7 +1022,9 @@ export const VideoPlayerModal: React.FC = () => {
                 }}
                 onTimeUpdate={() => {
                   if (videoRef.current && !isScrubbing) {
-                    setCurrentTime(videoRef.current.currentTime);
+                    const cur = videoRef.current.currentTime;
+                    savedTimeRef.current = cur;
+                    setCurrentTime(cur);
                     if (
                       videoRef.current.duration &&
                       !isNaN(videoRef.current.duration) &&
@@ -960,17 +1035,30 @@ export const VideoPlayerModal: React.FC = () => {
                   }
                 }}
                 onPlay={() => {
+                  pauseAllOtherVideos(videoRef.current);
                   setIsPlaying(true);
                   setIsEnded(false);
                   setVideoLoadError(null);
+                  setActiveMediaSession({
+                    title: activeVideo.title,
+                    artist: 'الأستاذ عمرو السيد',
+                    onPlay: () => videoRef.current?.play().catch(() => {}),
+                    onPause: () => videoRef.current?.pause(),
+                    onStop: () => stopAndUnloadModalMedia(false),
+                  });
                 }}
-                onPause={() => setIsPlaying(false)}
+                onPause={() => {
+                  setIsPlaying(false);
+                  clearMediaSession();
+                }}
                 onEnded={() => {
                   setIsPlaying(false);
                   setIsEnded(true);
+                  clearMediaSession();
                 }}
                 onError={() => {
                   setIsPlaying(false);
+                  clearMediaSession();
                   setVideoLoadError(
                     'تعذر تشغيل الفيديو مباشرة. تأكد من أن صلاحية الفيديو متاحة للتشغيل المباشر.'
                   );

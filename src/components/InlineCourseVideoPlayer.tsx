@@ -27,6 +27,12 @@ import {
   getAnyFullscreenElement,
   subscribeFullscreenChange,
 } from '../utils/fullscreen';
+import {
+  cleanupVideoElement,
+  clearMediaSession,
+  pauseAllOtherVideos,
+  setActiveMediaSession,
+} from '../utils/mediaSession';
 
 interface InlineCourseVideoPlayerProps {
   course: Lecture;
@@ -56,11 +62,14 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
 
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const seekbarRef = useRef<HTMLDivElement>(null);
   const recordedKeyRef = useRef<string>('');
   const hideControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
   const isScrubbingRef = useRef(false);
+  const savedTimeRef = useRef<number>(0);
+  const wasUnloadedRef = useRef<boolean>(false);
 
   const rawUrl = (subSection.videoUrl || course.videoUrl || '').trim();
   const [resolvedSrc, setResolvedSrc] = useState<string>('');
@@ -165,6 +174,10 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
 
     return () => {
       active = false;
+      cleanupVideoElement(videoRef.current);
+      clearMediaSession();
+      savedTimeRef.current = 0;
+      wasUnloadedRef.current = false;
       if (createdBlobUrl) {
         URL.revokeObjectURL(createdBlobUrl);
       }
@@ -213,7 +226,7 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
     }
   }, [volume, isMuted, resolvedSrc]);
 
-  const targetUrl = resolvedSrc || rawUrl;
+  const targetUrl = (resolvedSrc || rawUrl).replace(/([?&])autoplay=1/gi, '$1autoplay=0');
   const parsedYt = parseYouTubeUrl(targetUrl);
   const isYouTube = parsedYt.isValid && Boolean(parsedYt.external_id);
   const isDriveVideo =
@@ -226,8 +239,54 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
       )
     : '';
   const ytEmbedSrc = isYouTube
-    ? `https://www.youtube-nocookie.com/embed/${parsedYt.external_id}?rel=0&modestbranding=1&playsinline=1&fs=1&hl=ar`
+    ? `https://www.youtube-nocookie.com/embed/${parsedYt.external_id}?autoplay=0&enablejsapi=1&rel=0&modestbranding=1&playsinline=1&fs=1&hl=ar`
     : '';
+
+  const stopAndUnloadMedia = useCallback((preservePosition: boolean) => {
+    const video = videoRef.current;
+    if (video) {
+      if (preservePosition && Number.isFinite(video.currentTime) && video.currentTime > 0) {
+        savedTimeRef.current = video.currentTime;
+      } else if (!preservePosition) {
+        savedTimeRef.current = 0;
+      }
+      cleanupVideoElement(video);
+      wasUnloadedRef.current = preservePosition;
+    }
+    if (iframeRef.current?.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+          '*'
+        );
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'stopVideo', args: [] }),
+          '*'
+        );
+      } catch {}
+    }
+    clearMediaSession();
+    setIsPlaying(false);
+  }, []);
+
+  // Stop & unload video when page goes to background, tab hides, page hides, or section/component unmounts
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopAndUnloadMedia(true);
+      }
+    };
+    const handlePageHide = () => {
+      stopAndUnloadMedia(true);
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handlePageHide);
+      stopAndUnloadMedia(false);
+    };
+  }, [stopAndUnloadMedia, subSection.id]);
 
   const resetControlsTimer = useCallback(() => {
     setShowControls(true);
@@ -288,10 +347,27 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
     if (!video) return;
     if (isPlaying) {
       video.pause();
+      clearMediaSession();
       setIsPlaying(false);
     } else {
-      if (isEnded) {
+      pauseAllOtherVideos(video);
+      if (wasUnloadedRef.current || !video.getAttribute('src')) {
+        video.setAttribute('src', targetUrl);
+        video.load();
+        wasUnloadedRef.current = false;
+        const restorePos = savedTimeRef.current;
+        if (restorePos > 0) {
+          const seekOnReady = () => {
+            try {
+              video.currentTime = restorePos;
+            } catch {}
+            video.removeEventListener('loadedmetadata', seekOnReady);
+          };
+          video.addEventListener('loadedmetadata', seekOnReady);
+        }
+      } else if (isEnded) {
         video.currentTime = 0;
+        savedTimeRef.current = 0;
         setIsEnded(false);
       }
       video.play().then(() => setIsPlaying(true)).catch(() => {});
@@ -495,20 +571,22 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
           </div>
         ) : isYouTube ? (
           <iframe
+            ref={iframeRef}
             key={ytEmbedSrc}
             src={ytEmbedSrc}
             title={subSection.title}
             className="w-full h-full border-0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; web-share"
+            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; web-share"
             allowFullScreen
           />
         ) : isDriveVideo ? (
           <iframe
+            ref={iframeRef}
             key={driveEmbedSrc}
             src={driveEmbedSrc}
             title={subSection.title}
             className="w-full h-full border-0"
-            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+            allow="encrypted-media; fullscreen; picture-in-picture"
             allowFullScreen
           />
         ) : (
@@ -536,7 +614,9 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
               }}
               onTimeUpdate={() => {
                 if (videoRef.current && !isScrubbingRef.current) {
-                  setCurrentTime(videoRef.current.currentTime);
+                  const cur = videoRef.current.currentTime;
+                  savedTimeRef.current = cur;
+                  setCurrentTime(cur);
                   if (
                     videoRef.current.duration &&
                     !isNaN(videoRef.current.duration) &&
@@ -547,21 +627,36 @@ export const InlineCourseVideoPlayer: React.FC<InlineCourseVideoPlayerProps> = (
                 }
               }}
               onPlay={() => {
+                pauseAllOtherVideos(videoRef.current);
                 setIsPlaying(true);
                 setIsEnded(false);
                 setVideoError(null);
+                setActiveMediaSession({
+                  title: subSection.title,
+                  artist: lesson.title,
+                  album: course.title,
+                  onPlay: () => videoRef.current?.play().catch(() => {}),
+                  onPause: () => videoRef.current?.pause(),
+                  onStop: () => stopAndUnloadMedia(false),
+                });
               }}
-              onPause={() => setIsPlaying(false)}
+              onPause={() => {
+                setIsPlaying(false);
+                clearMediaSession();
+              }}
               onEnded={() => {
                 setIsPlaying(false);
                 setIsEnded(true);
                 setShowControls(true);
+                clearMediaSession();
               }}
-              onError={() =>
+              onError={() => {
+                setIsPlaying(false);
+                clearMediaSession();
                 setVideoError(
                   'تعذر تشغيل الفيديو مباشرة. تأكد من صلاحية الرابط أو صيغة الملف.'
-                )
-              }
+                );
+              }}
               className="platform-custom-video w-full h-full object-contain bg-black pointer-events-none"
             />
 

@@ -28,6 +28,15 @@ export function formatFileSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+function formatRemainingTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'أقل من ثانية';
+  const total = Math.ceil(seconds);
+  if (total < 60) return `${total} ث`;
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return secs > 0 ? `${mins} د ${secs} ث` : `${mins} دقيقة`;
+}
+
 export function resolveTargetBucket(
   file: Pick<File, 'name' | 'type'>,
   explicitBucket?: SupabaseBucketName
@@ -61,8 +70,9 @@ export function buildUniqueEnglishStoragePath(fileName: string): string {
 }
 
 /**
- * Direct browser-to-Supabase Storage upload (strictly uses 'Files' or 'Lectures').
- * Never falls back to blob:, base64, localStorage, or proxy routes.
+ * Direct browser-to-Supabase Storage upload via XMLHttpRequest with genuine byte progress.
+ * Strictly uses 'Files' or 'Lectures' (case-sensitive).
+ * Never uses blob:, base64, localStorage, or proxy routes.
  */
 export async function uploadFileToSupabaseDirect(
   file: File,
@@ -92,121 +102,177 @@ export async function uploadFileToSupabaseDirect(
     throw configErr;
   }
 
-  let simulatedPercent = 8;
+  let authToken = creds.key;
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData?.session?.access_token) {
+      authToken = sessionData.session.access_token;
+    }
+  } catch {
+    // Fallback to anon key if no active user session token
+  }
+
+  const baseUrl = creds.url.replace(/\/+$/, '');
+  const encodedPath = path.split('/').map((seg) => encodeURIComponent(seg)).join('/');
+  const uploadEndpoint = `${baseUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
   const startedAt = Date.now();
 
-  const emitProgress = (percent: number, speedText: string, remainingText: string) => {
-    const rawLoaded = Math.round((file.size * percent) / 100);
-    options?.onProgress?.({
-      percent,
-      loadedFormatted: formatFileSize(rawLoaded),
-      totalFormatted,
-      speed: speedText,
-      remaining: remainingText,
-      rawLoaded,
-      rawTotal: file.size,
-    });
-  };
+  options?.onProgress?.({
+    percent: 0,
+    loadedFormatted: '0 B',
+    totalFormatted,
+    speed: 'جارِ بدء النقل...',
+    remaining: 'جارِ الحساب...',
+    rawLoaded: 0,
+    rawTotal: file.size,
+  });
 
-  emitProgress(simulatedPercent, 'اتصال بـ Supabase...', 'جارِ التقدير...');
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let abortPollTimer: ReturnType<typeof setInterval> | null = null;
+    let settled = false;
 
-  const progressTimer = setInterval(() => {
-    if (options?.signal?.aborted) {
-      clearInterval(progressTimer);
-      return;
+    const finishReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      if (abortPollTimer) clearInterval(abortPollTimer);
+      reject(err);
+    };
+
+    const finishResolve = () => {
+      if (settled) return;
+      settled = true;
+      if (abortPollTimer) clearInterval(abortPollTimer);
+      resolve();
+    };
+
+    if (options?.signal) {
+      abortPollTimer = setInterval(() => {
+        if (options.signal?.aborted) {
+          try {
+            xhr.abort();
+          } catch {}
+          finishReject(new Error('تم إلغاء عملية الرفع.'));
+        }
+      }, 200);
     }
-    const elapsedSec = Math.max(0.5, (Date.now() - startedAt) / 1000);
-    simulatedPercent = Math.min(92, simulatedPercent + (simulatedPercent < 50 ? 9 : 4));
-    const estimatedBytes = (file.size * simulatedPercent) / 100;
-    const speedBps = estimatedBytes / elapsedSec;
-    const speedStr = `${formatFileSize(speedBps)}/ث`;
-    const remainingSec = speedBps > 0 ? Math.max(1, Math.round((file.size - estimatedBytes) / speedBps)) : 5;
-    emitProgress(simulatedPercent, speedStr, `${remainingSec} ث`);
-  }, 350);
 
-  try {
-    console.log('[Supabase Storage Upload Start]', {
-      bucket,
-      path,
-      fileName: file.name,
-      fileSize: file.size,
-      contentType,
-      supabaseUrl: creds.url,
-    });
+    xhr.open('POST', uploadEndpoint, true);
+    xhr.setRequestHeader('apikey', creds.key);
+    xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+    xhr.setRequestHeader('x-upsert', 'true');
+    xhr.setRequestHeader('Content-Type', contentType);
 
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .upload(path, file, {
-        upsert: true,
-        contentType,
+    xhr.upload.onprogress = (ev: ProgressEvent) => {
+      if (options?.signal?.aborted) {
+        try {
+          xhr.abort();
+        } catch {}
+        return;
+      }
+      const total = ev.lengthComputable && ev.total > 0 ? ev.total : file.size || 1;
+      const loaded = Math.min(ev.loaded, total);
+      const rawPct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+      const percent = Math.min(99, Math.max(0, rawPct));
+      const elapsedSec = Math.max(0.15, (Date.now() - startedAt) / 1000);
+      const speedBps = loaded / elapsedSec;
+      const speedStr = speedBps > 0 ? `${formatFileSize(speedBps)}/ث` : 'جارِ النقل...';
+      const remainingSec = speedBps > 0 ? (total - loaded) / speedBps : 0;
+
+      options?.onProgress?.({
+        percent,
+        loadedFormatted: formatFileSize(loaded),
+        totalFormatted: formatFileSize(total),
+        speed: speedStr,
+        remaining: loaded >= total ? 'جاري التأكيد...' : formatRemainingTime(remainingSec),
+        rawLoaded: loaded,
+        rawTotal: total,
       });
+    };
 
-    clearInterval(progressTimer);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        finishResolve();
+        return;
+      }
 
-    if (options?.signal?.aborted) {
-      throw new Error('تم إلغاء عملية الرفع.');
-    }
-
-    if (error || !data?.path) {
-      const realErrorMessage =
-        error?.message ||
-        (error as any)?.error_description ||
-        (error as any)?.error ||
-        (!data?.path ? 'لم يرجع Supabase مسار الملف المرفوع' : 'فشل الرفع إلى Supabase Storage');
+      let realErrorMessage = `HTTP ${xhr.status} (${xhr.statusText || 'Upload Failed'})`;
+      try {
+        const parsed = JSON.parse(xhr.responseText || '{}');
+        realErrorMessage =
+          parsed.message ||
+          parsed.error_description ||
+          parsed.error ||
+          realErrorMessage;
+      } catch {
+        if (xhr.responseText) {
+          realErrorMessage = `${realErrorMessage}: ${xhr.responseText.slice(0, 180)}`;
+        }
+      }
 
       console.error('[Supabase Storage Upload Failed]', {
         bucket,
         path,
+        status: xhr.status,
         fileName: file.name,
         contentType,
-        error,
         realErrorMessage,
       });
-
-      throw new Error(`${bucket}/${path}: ${realErrorMessage}`);
-    }
-
-    const { data: publicUrlData } = supabase.storage
-      .from(bucket)
-      .getPublicUrl(data.path);
-
-    const publicUrl = publicUrlData?.publicUrl || '';
-    if (!publicUrl) {
-      const urlErr = `تم الرفع إلى ${bucket}/${data.path} لكن تعذر جلب الرابط العام (getPublicUrl).`;
-      console.error('[Supabase Storage PublicUrl Error]', { bucket, path: data.path });
-      throw new Error(urlErr);
-    }
-
-    const diagnosticMessage = `تم الرفع إلى ${bucket}/${data.path}`;
-    console.log('[Supabase Storage Upload Success]', {
-      diagnosticMessage,
-      bucket,
-      path: data.path,
-      publicUrl,
-    });
-
-    emitProgress(100, 'مكتمل', '0 ثانية');
-
-    return {
-      url: publicUrl,
-      bucket,
-      path: data.path,
-      fileName: file.name,
-      fileSize: totalFormatted,
-      sizeBytes: file.size,
-      diagnosticMessage,
-      storageProvider: 'supabase',
+      finishReject(new Error(`${bucket}/${path}: ${realErrorMessage}`));
     };
-  } catch (err: any) {
-    clearInterval(progressTimer);
-    console.error('[Supabase Storage Upload Exception]', {
-      bucket,
-      path,
-      fileName: file.name,
-      err,
-    });
-    throw err instanceof Error ? err : new Error(String(err || 'فشل الرفع إلى Supabase'));
+
+    xhr.onerror = () => {
+      const msg = `تعذر الاتصال بـ Supabase Storage (${bucket}/${path}) — تحقق من الشبكة أو صلاحيات الـ Bucket.`;
+      console.error('[Supabase Storage Network Error]', { bucket, path, fileName: file.name });
+      finishReject(new Error(msg));
+    };
+
+    xhr.onabort = () => {
+      finishReject(new Error('تم إلغاء عملية الرفع.'));
+    };
+
+    xhr.send(file);
+  });
+
+  const { data: publicUrlData } = supabase.storage
+    .from(bucket)
+    .getPublicUrl(path);
+
+  const publicUrl = publicUrlData?.publicUrl || '';
+  if (!publicUrl) {
+    const urlErr = `تم الرفع إلى ${bucket}/${path} لكن تعذر جلب الرابط العام (getPublicUrl).`;
+    console.error('[Supabase Storage PublicUrl Error]', { bucket, path });
+    throw new Error(urlErr);
   }
+
+  const diagnosticMessage = `تم الرفع إلى ${bucket}/${path}`;
+  console.log('[Supabase Storage Upload Success]', {
+    diagnosticMessage,
+    bucket,
+    path,
+    publicUrl,
+  });
+
+  options?.onProgress?.({
+    percent: 100,
+    loadedFormatted: totalFormatted,
+    totalFormatted,
+    speed: 'مكتمل',
+    remaining: '0 ثانية',
+    rawLoaded: file.size,
+    rawTotal: file.size,
+  });
+
+  return {
+    url: publicUrl,
+    bucket,
+    path,
+    fileName: file.name,
+    fileSize: totalFormatted,
+    sizeBytes: file.size,
+    diagnosticMessage,
+    storageProvider: 'supabase',
+  };
 }
 
 export function getStoredSupabaseConfig(): {

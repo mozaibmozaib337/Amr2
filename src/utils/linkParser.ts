@@ -63,7 +63,7 @@ export function parseYouTubeUrl(input: string): ParsedLinkResult {
 
   if (match && match[1]) {
     const id = match[1];
-    const embedUrl = `https://www.youtube-nocookie.com/embed/${id}?controls=0&rel=0&modestbranding=1&disablekb=1&fs=0&iv_load_policy=3&playsinline=1&cc_load_policy=0`;
+    const embedUrl = `https://www.youtube-nocookie.com/embed/${id}?autoplay=0&enablejsapi=1&controls=0&rel=0&modestbranding=1&disablekb=1&fs=0&iv_load_policy=3&playsinline=1&cc_load_policy=0`;
     const cleanDisplayUrl = `https://www.youtube.com/watch?v=${id}`;
 
     return {

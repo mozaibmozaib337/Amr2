@@ -22,7 +22,6 @@ import {
   Save,
   LogIn,
   Maximize2,
-  Minimize2,
   LayoutList,
   AlignRight,
 } from 'lucide-react';
@@ -43,13 +42,6 @@ import {
 import { parseDriveUrl } from '../utils/linkParser';
 import { AssessmentConfig, InteractiveAssessmentSolver } from './InteractiveAssessmentSolver';
 import { InlineCourseVideoPlayer } from './InlineCourseVideoPlayer';
-import { InBrowserPdfViewer } from './InBrowserPdfViewer';
-import {
-  enterElementFullscreen,
-  exitAnyFullscreen,
-  getAnyFullscreenElement,
-  subscribeFullscreenChange,
-} from '../utils/fullscreen';
 
 interface CourseDetailViewProps {
   course: Lecture;
@@ -88,52 +80,13 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [draftDescription, setDraftDescription] = useState(course.description || '');
 
-  // Fullscreen state for inline image/link preview panels
-  const [isExtraFullscreen, setIsExtraFullscreen] = useState(false);
-  const isExtraCssFsRef = useRef(false);
-  const extraContainerRef = useRef<HTMLDivElement | null>(null);
   const contentTopRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setOpenedItem(null);
     setSelectedSubItemId(null);
     setExpandedLessonIds({});
-    setIsExtraFullscreen(false);
   }, [course.id]);
-
-  useEffect(() => {
-    return subscribeFullscreenChange((nativeActive) => {
-      if (nativeActive) {
-        isExtraCssFsRef.current = false;
-        setIsExtraFullscreen(true);
-      } else if (!isExtraCssFsRef.current) {
-        setIsExtraFullscreen(false);
-      }
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!isExtraFullscreen) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [isExtraFullscreen]);
-
-  const toggleExtraFullscreen = async () => {
-    if (isExtraFullscreen || getAnyFullscreenElement()) {
-      isExtraCssFsRef.current = false;
-      await exitAnyFullscreen();
-      setIsExtraFullscreen(false);
-      return;
-    }
-    const mode = await enterElementFullscreen(extraContainerRef.current, {
-      lockLandscape: true,
-    });
-    isExtraCssFsRef.current = mode === 'css';
-    setIsExtraFullscreen(true);
-  };
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'secretary';
   const isFreeCourse = Boolean(course.isFree || course.price === 0);
@@ -214,7 +167,6 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
     setExpandedLessonIds((prev) => ({ ...prev, [lesson.id]: true }));
     setOpenedItem({ lessonId: lesson.id, subId: sub.id });
     setSelectedSubItemId(subItems[0]?.id || null);
-    setIsExtraFullscreen(false);
 
     if (typeof window !== 'undefined') {
       requestAnimationFrame(() => {
@@ -247,77 +199,71 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   ) => {
     const trimmedFile = rawFileUrl.trim();
     const trimmedExt = (externalUrl || '').trim();
+    const activeRawUrl = trimmedFile || trimmedExt;
 
-    if (trimmedFile) {
-      const parsedDrive = parseDriveUrl(trimmedFile);
-      const resolvedUrl = parsedDrive.isValid ? parsedDrive.previewUrl : trimmedFile;
+    if (activeRawUrl) {
+      const parsedDrive = parseDriveUrl(activeRawUrl);
+      const resolvedUrl = parsedDrive.isValid ? parsedDrive.previewUrl : activeRawUrl;
       const detectedImage = isImageUrl(resolvedUrl);
+      const resolvedFileType: 'pdf' | 'image' | 'other' = detectedImage
+        ? 'image'
+        : trimmedFile || parsedDrive.isValid || /\.pdf(\?|$)/i.test(resolvedUrl)
+        ? 'pdf'
+        : 'other';
+
+      const handleOpenInPlatformModal = () => {
+        setActiveDocument({
+          title: displayTitle,
+          fileUrl: resolvedUrl,
+          fileName:
+            fileName ||
+            (resolvedFileType === 'image'
+              ? `${displayTitle}.png`
+              : resolvedFileType === 'pdf'
+              ? `${displayTitle}.pdf`
+              : displayTitle),
+          fileType: resolvedFileType,
+        });
+      };
 
       return (
-        <div className="w-full h-[65dvh] min-h-[420px] sm:h-[74dvh] max-h-[860px] rounded-2xl overflow-hidden border border-cyan-900/40 bg-white shadow-xl">
-          <InBrowserPdfViewer
-            key={`${activeSub?.id || displayTitle}-${resolvedUrl}`}
-            fileUrl={resolvedUrl}
-            fileName={fileName || `${displayTitle}${detectedImage ? '.png' : '.pdf'}`}
-            title={displayTitle}
-            fileType={detectedImage ? 'image' : undefined}
-          />
-        </div>
-      );
-    }
-
-    if (trimmedExt) {
-      const parsedDriveExt = parseDriveUrl(trimmedExt);
-      const resolvedExt = parsedDriveExt.isValid ? parsedDriveExt.previewUrl : trimmedExt;
-      return (
-        <div
-          ref={extraContainerRef}
-          className={
-            isExtraFullscreen
-              ? 'fixed inset-0 z-[9999] w-[100dvw] h-[100dvh] bg-white flex flex-col overflow-hidden'
-              : 'w-full bg-[#091224] border border-cyan-900/40 rounded-2xl overflow-hidden shadow-xl flex flex-col'
-          }
-        >
-          <div className="px-4 py-3 bg-[#050811] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <ExternalLink className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span className="text-xs sm:text-sm font-bold text-white truncate">
-                {displayTitle}
-              </span>
+        <div className="w-full min-h-[340px] sm:min-h-[420px] bg-[#091224] border border-cyan-900/40 rounded-2xl shadow-xl p-6 sm:p-10 flex flex-col items-center justify-center text-center">
+          <div className="max-w-md w-full space-y-5">
+            <div className="w-16 h-16 rounded-2xl bg-cyan-600/20 border border-cyan-500/40 text-cyan-400 flex items-center justify-center mx-auto shadow-lg shadow-cyan-600/10">
+              {trimmedFile ? (
+                <FileText className="w-8 h-8" />
+              ) : (
+                <ExternalLink className="w-8 h-8" />
+              )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-slate-400 truncate">
+                {displayTitle}
+              </p>
+              <h3 className="text-lg sm:text-xl font-extrabold text-white leading-relaxed">
+                اضغط{' '}
+                <button
+                  type="button"
+                  onClick={handleOpenInPlatformModal}
+                  className="text-cyan-400 hover:text-cyan-300 underline underline-offset-4 decoration-2 cursor-pointer font-extrabold focus:outline-none"
+                >
+                  هنا
+                </button>{' '}
+                لفتح الملف!
+              </h3>
+            </div>
+
+            <div className="pt-1 flex justify-center">
               <button
                 type="button"
-                onClick={toggleExtraFullscreen}
-                className="min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                onClick={handleOpenInPlatformModal}
+                className="min-h-[48px] w-full sm:w-auto px-8 py-3 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-sm sm:text-base font-extrabold shadow-lg shadow-cyan-600/30 inline-flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98]"
               >
-                {isExtraFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-                <span>{isExtraFullscreen ? 'تصغير الشاشة' : 'تكبير الشاشة'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setActiveDocument({
-                    title: displayTitle,
-                    fileUrl: resolvedExt,
-                    fileName: fileName || displayTitle,
-                    fileType: parsedDriveExt.isValid ? 'pdf' : 'other',
-                  })
-                }
-                className="min-h-[44px] sm:min-h-[38px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-              >
-                <Maximize2 className="w-4 h-4 text-cyan-400" />
+                <Maximize2 className="w-4 h-4 shrink-0" />
                 <span>فتح الملف</span>
               </button>
             </div>
-          </div>
-          <div className={isExtraFullscreen ? 'flex-1 bg-white' : 'w-full h-[62dvh] min-h-[380px] bg-white'}>
-            <iframe
-              src={resolvedExt}
-              title={displayTitle}
-              className="w-full h-full border-0 bg-white"
-              allowFullScreen
-            />
           </div>
         </div>
       );
@@ -552,7 +498,6 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
                   type="button"
                   onClick={() => {
                     setSelectedSubItemId(it.id);
-                    setIsExtraFullscreen(false);
                   }}
                   className={`min-h-[40px] px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
                     isSelected

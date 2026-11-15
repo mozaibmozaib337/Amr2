@@ -10,6 +10,8 @@ import {
   SupabaseUploadResult,
   uploadFileToSupabaseDirect,
 } from './supabaseStorage';
+import { loadPdfFromBytes } from './pdfRenderer';
+import { cleanupVideoElement } from './mediaSession';
 
 export interface ProgressPayload {
   percent: number;
@@ -23,6 +25,17 @@ export interface ProgressPayload {
 
 export function formatBytes(bytes: number): string {
   return formatFileSize(bytes);
+}
+
+export function formatSecondsToHMS(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || isNaN(totalSeconds) || totalSeconds < 0) {
+    return '00:00:00';
+  }
+  const total = Math.floor(totalSeconds);
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 export function formatSecondsToTime(totalSeconds: number): string {
@@ -53,32 +66,81 @@ export function formatDurationArabic(totalSeconds: number): string {
 
 /**
  * Probes the exact duration of a local video file in seconds using HTML5 video metadata
+ * and cleanly releases the temporary video element afterwards.
  */
-export function probeVideoDuration(file: File): Promise<{ durationSeconds: number; formatted: string }> {
+export function probeVideoDuration(
+  file: File
+): Promise<{ durationSeconds: number; formatted: string; hms: string }> {
   return new Promise((resolve) => {
     const video = document.createElement('video');
     video.preload = 'metadata';
+    video.muted = true;
     const tempMetaUrl = URL.createObjectURL(file);
+    let settled = false;
+
+    const cleanup = () => {
+      cleanupVideoElement(video);
+      try {
+        URL.revokeObjectURL(tempMetaUrl);
+      } catch {}
+    };
+
+    const done = (secs: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+      if (secs > 0) {
+        resolve({
+          durationSeconds: secs,
+          formatted: formatDurationArabic(secs),
+          hms: formatSecondsToHMS(secs),
+        });
+      } else {
+        resolve({
+          durationSeconds: 0,
+          formatted: '',
+          hms: '',
+        });
+      }
+    };
+
+    const timeoutId = setTimeout(() => done(0), 8000);
 
     video.onloadedmetadata = () => {
-      URL.revokeObjectURL(tempMetaUrl);
       const secs = Math.round(video.duration);
-      resolve({
-        durationSeconds: secs,
-        formatted: formatDurationArabic(secs),
-      });
+      done(Number.isFinite(secs) && secs > 0 ? secs : 0);
     };
 
     video.onerror = () => {
-      URL.revokeObjectURL(tempMetaUrl);
-      resolve({
-        durationSeconds: 3600,
-        formatted: '60 دقيقة',
-      });
+      done(0);
     };
 
     video.src = tempMetaUrl;
   });
+}
+
+/**
+ * Reads exact page count of a local PDF file using PDF.js.
+ */
+export async function probePdfPageCount(file: File): Promise<number | null> {
+  const isPdf =
+    file.type === 'application/pdf' ||
+    /\.pdf$/i.test(file.name);
+  if (!isPdf) return null;
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const doc = await loadPdfFromBytes(new Uint8Array(buffer));
+    const count = doc && typeof doc.numPages === 'number' && doc.numPages > 0 ? doc.numPages : null;
+    try {
+      await doc?.cleanup?.();
+    } catch {}
+    return count;
+  } catch (err) {
+    console.warn('[PDF Page Count Probe] failed:', err);
+    return null;
+  }
 }
 
 /**

@@ -156,7 +156,7 @@ app.post('/api/inspect-media', async (req, res) => {
     if (ytMatch && ytMatch[1]) {
       const videoId = ytMatch[1];
       const normalizedWatchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      const embedUrl = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&controls=1&playsinline=1`;
+      const embedUrl = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=0&enablejsapi=1&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&controls=1&playsinline=1`;
 
       let durationSeconds = 0;
       let title = '';
@@ -170,13 +170,14 @@ app.post('/api/inspect-media', async (req, res) => {
         });
         const html = await response.text();
 
-        // 1. Extract exact duration from approxDurationMs
-        const durMatch = html.match(/"approxDurationMs"\s*:\s*"(\d+)"/) || html.match(/"lengthSeconds"\s*:\s*"(\d+)"/);
-        if (durMatch) {
-          durationSeconds = durMatch[1].length > 5 ? Math.round(parseInt(durMatch[1], 10) / 1000) : parseInt(durMatch[1], 10);
+        const secMatch = html.match(/"lengthSeconds"\s*:\s*"(\d+)"/);
+        const msMatch = html.match(/"approxDurationMs"\s*:\s*"(\d+)"/);
+        if (secMatch && parseInt(secMatch[1], 10) > 0) {
+          durationSeconds = parseInt(secMatch[1], 10);
+        } else if (msMatch && parseInt(msMatch[1], 10) > 0) {
+          durationSeconds = Math.round(parseInt(msMatch[1], 10) / 1000);
         }
 
-        // 2. Extract title
         const titleMatch = html.match(/"title"\s*:\s*"([^"]+)"/) || html.match(/<title>([^<]+)<\/title>/);
         if (titleMatch) {
           title = titleMatch[1].replace(/ - YouTube$/, '').trim();
@@ -185,7 +186,6 @@ app.post('/api/inspect-media', async (req, res) => {
         console.warn('YouTube scrape error:', err);
       }
 
-      // If scrape missed title, try noembed
       if (!title) {
         try {
           const oeRes = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(normalizedWatchUrl)}`);
@@ -196,15 +196,20 @@ app.post('/api/inspect-media', async (req, res) => {
         } catch {}
       }
 
-      if (!durationSeconds || durationSeconds <= 0) {
-        durationSeconds = 2700; // 45 mins fallback
-      }
+      const h = durationSeconds > 0 ? Math.floor(durationSeconds / 3600) : 0;
+      const m = durationSeconds > 0 ? Math.floor((durationSeconds % 3600) / 60) : 0;
+      const s = durationSeconds > 0 ? durationSeconds % 60 : 0;
+      const durationHms =
+        durationSeconds > 0
+          ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+          : undefined;
 
       return res.json({
         success: true,
         type: 'youtube',
         publicUrl: embedUrl,
-        durationSeconds,
+        durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+        durationHms,
         title: title || 'محاضرة كيمياء - يوتيوب',
         sizeFormatted: 'بث فيديو عالي الدقة HD 1080p',
       });
@@ -354,52 +359,56 @@ app.post('/api/inspect-media', async (req, res) => {
     // 4. Document (PDF / Word / Excel / Image / Direct Link): Accurate Page Count Detection
     if (type === 'document' || cleanUrl.toLowerCase().includes('.pdf') || cleanUrl.includes('drive.google.com')) {
       let pageCount = 0;
-      let detectedTitle = cleanUrl.split('/').pop()?.split('?')[0]?.replace(/\.[^/.]+$/, '') || 'مذكرة كيمياء';
+      const detectedTitle = cleanUrl.split('/').pop()?.split('?')[0]?.replace(/\.[^/.]+$/, '') || 'مذكرة كيمياء';
 
       try {
         const docRes = await fetch(cleanUrl, {
           headers: {
             'User-Agent': 'Mozilla/5.0',
-            Range: 'bytes=0-1048576', // Read initial 1MB to inspect PDF catalog/page tree
           },
         });
         if (docRes.ok) {
           const arrayBuffer = await docRes.arrayBuffer();
           const text = Buffer.from(arrayBuffer).toString('latin1');
-          
-          // Pattern A: Direct Page object count (/Type /Page)
-          const pageMatches = text.match(/\/Type\s*\/Page[^s]/g);
-          if (pageMatches && pageMatches.length > 0) {
-            pageCount = pageMatches.length;
+
+          // Pattern A: /Type /Pages ... /Count N (take maximum /Count found in Pages catalog dictionaries)
+          const pagesDictRegex = /\/Type\s*\/Pages[\s\S]{0,250}?\/Count\s+(\d+)/g;
+          let m: RegExpExecArray | null;
+          while ((m = pagesDictRegex.exec(text)) !== null) {
+            const c = parseInt(m[1], 10);
+            if (c > pageCount) pageCount = c;
           }
 
-          // Pattern B: /Count in Pages dictionary (/Count 24)
+          // Pattern B: Direct Page objects (/Type /Page not followed by s)
           if (!pageCount || pageCount === 0) {
-            const countMatch = text.match(/\/Count\s+(\d+)/);
-            if (countMatch && parseInt(countMatch[1], 10) > 0) {
-              pageCount = parseInt(countMatch[1], 10);
+            const pageMatches = text.match(/\/Type\s*\/Page(?![a-zA-Z])/g);
+            if (pageMatches && pageMatches.length > 0) {
+              pageCount = pageMatches.length;
             }
+          }
+
+          // Pattern C: Any /Count N fallback
+          if (!pageCount || pageCount === 0) {
+            const countMatches = [...text.matchAll(/\/Count\s+(\d+)/g)].map((x) => parseInt(x[1], 10));
+            const maxCount = countMatches.length > 0 ? Math.max(...countMatches) : 0;
+            if (maxCount > 0) pageCount = maxCount;
           }
         }
       } catch (err) {
         console.warn('PDF page probe error:', err);
       }
 
-      if (!pageCount || pageCount <= 0) {
-        pageCount = 12; // Realistic fallback
-      }
-
       return res.json({
         success: true,
         type: 'document',
         publicUrl: cleanUrl,
-        pageCount,
+        pageCount: pageCount > 0 ? pageCount : undefined,
         title: decodeURIComponent(detectedTitle),
-        sizeFormatted: `${pageCount} صفحة - عارض مدمج`,
+        sizeFormatted: pageCount > 0 ? `${pageCount} صفحة` : 'مستند PDF معتمد',
       });
     }
 
-    // 4. Direct video or media link: Perform real HTTP HEAD & Range fetch to check header metadata
+    // 5. Direct video or media link: Perform real HTTP HEAD fetch to check header metadata
     try {
       const headRes = await fetch(cleanUrl, {
         method: 'HEAD',
@@ -429,8 +438,6 @@ app.post('/api/inspect-media', async (req, res) => {
         contentLength,
         sizeFormatted: sizeInMb,
         acceptRanges,
-        durationSeconds: 3600,
-        pageCount: detectedKind === 'pdf' ? 12 : undefined,
         title: decodeURIComponent(cleanUrl.split('/').pop()?.split('?')[0]?.replace(/\.[^/.]+$/, '') || 'محاضرة كيمياء'),
       });
     } catch {
@@ -438,7 +445,6 @@ app.post('/api/inspect-media', async (req, res) => {
         success: true,
         type: 'direct',
         publicUrl: cleanUrl,
-        durationSeconds: 2700,
         title: 'محاضرة فيديو كيمياء',
         sizeFormatted: 'بث مباشر عالي السرعة',
       });

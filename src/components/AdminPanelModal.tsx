@@ -60,17 +60,18 @@ import {
   Volume2,
   FileAudio,
 } from 'lucide-react';
-import { GradeLevel, Question, Lecture, Exam, Homework, PaymentMethod, HonoredStudent, FileDocument, SubscriptionType, StudentDossier, UploadProgressInfo, TeacherProfile, CourseLesson } from '../types';
+import { GradeLevel, Question, Lecture, Exam, Homework, PaymentMethod, HonoredStudent, FileDocument, SubscriptionType, StudentDossier, UploadProgressInfo, TeacherProfile, CourseLesson, LessonSubSection } from '../types';
 import { QuestionReviewEditor } from './QuestionReviewEditor';
 import { optimizeImageForAi } from '../utils/fileOptimizer';
-import { uploadFileWithRealProgress, probeVideoDuration } from '../utils/realUploader';
+import { uploadFileWithRealProgress, probeVideoDuration, probePdfPageCount } from '../utils/realUploader';
 import { SUPABASE_FILES_BUCKET, SUPABASE_LECTURES_BUCKET, uploadFileToSupabaseDirect } from '../utils/supabaseStorage';
 import { GeminiTeacherDashboard } from './GeminiTeacherDashboard';
 import { UniversalPlusUploader } from './UniversalPlusUploader';
 import { chatWithAiClient, parseQuizWithAiClient, extractStudentsWithAiClient, resetAiConnection, parseScientificQuestionsLocally } from '../utils/aiClientService';
 import { getActiveSupabaseCredentials, updateActiveSupabaseCredentials, resetActiveSupabaseCredentials, testSupabaseSchemaHealth } from '../services/supabaseService';
 import { Database, Link2, Copy, Layers } from 'lucide-react';
-import { parseYouTubeUrl, parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
+import { parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
+import { LinkVerificationService } from '../utils/LinkVerificationService';
 import { TopRankingsDirectorySection } from './TopRankingsDirectorySection';
 import { StudentDirectorySection } from './StudentDirectorySection';
 import { buildWhatsAppUrl, openExternalSafe } from '../utils/safeExternalLink';
@@ -259,6 +260,7 @@ export const AdminPanelModal: React.FC = () => {
   const [videoGrade, setVideoGrade] = useState<GradeLevel>(activeGrade !== 'all' ? activeGrade : 'sec3');
   const [videoDuration, setVideoDuration] = useState('60');
   const [videoDurationFormatted, setVideoDurationFormatted] = useState('');
+  const [videoDurationHms, setVideoDurationHms] = useState('');
   const [videoPrice, setVideoPrice] = useState('50');
   const [isVideoFree, setIsVideoFree] = useState(false);
   const [videoDesc, setVideoDesc] = useState('');
@@ -266,6 +268,11 @@ export const AdminPanelModal: React.FC = () => {
   const [videoFileUrl, setVideoFileUrl] = useState('');
   const [videoUploadProgress, setVideoUploadProgress] = useState<UploadProgressInfo | null>(null);
   const [docUploadProgress, setDocUploadProgress] = useState<UploadProgressInfo | null>(null);
+  const [docPageCount, setDocPageCount] = useState<number | null>(null);
+  const [isVerifyingVideoLink, setIsVerifyingVideoLink] = useState(false);
+  const [isVerifyingDocLink, setIsVerifyingDocLink] = useState(false);
+  const [videoLinkCheckMeta, setVideoLinkCheckMeta] = useState<string | null>(null);
+  const [docLinkCheckMeta, setDocLinkCheckMeta] = useState<string | null>(null);
   const [showNewCourseCurriculum, setShowNewCourseCurriculum] = useState(false);
   const [newCourseMeta, setNewCourseMeta] = useState<{
     coverImageUrl?: string;
@@ -452,6 +459,10 @@ export const AdminPanelModal: React.FC = () => {
   const lastSyncedExamRef = useRef<string>('');
   const prevFileIdRef = useRef<string | null>(null);
   const lastSyncedFileRef = useRef<string>('');
+  const pendingLectureSaveRef = useRef<{ lecture: Lecture; serialized: string } | null>(null);
+  const latestEditingLectureRef = useRef<Lecture | null>(null);
+  const updateLectureRef = useRef(updateLecture);
+  updateLectureRef.current = updateLecture;
 
   const showNotice = (msg: string) => {
     setNotification(msg);
@@ -512,26 +523,63 @@ export const AdminPanelModal: React.FC = () => {
     return () => clearTimeout(timer);
   }, [isAdminPanelOpen, profName, profTitle, profBio, profPhone, profWhatsapp, profEmail, profOffice, profAnnouncement, updateTeacherProfile]);
 
-  // Debounced auto-save for Published Lecture editing modal
+  // Debounced auto-save for Published Lecture editing modal + instant flush support
   useEffect(() => {
+    latestEditingLectureRef.current = editingLecture;
     if (!editingLecture) {
       prevLectureIdRef.current = null;
       lastSyncedLectureRef.current = '';
+      pendingLectureSaveRef.current = null;
       return;
     }
     const serialized = JSON.stringify(editingLecture);
     if (prevLectureIdRef.current !== editingLecture.id) {
       prevLectureIdRef.current = editingLecture.id;
       lastSyncedLectureRef.current = serialized;
+      pendingLectureSaveRef.current = null;
       return;
     }
-    if (serialized === lastSyncedLectureRef.current) return;
+    if (serialized === lastSyncedLectureRef.current) {
+      pendingLectureSaveRef.current = null;
+      return;
+    }
+    pendingLectureSaveRef.current = { lecture: editingLecture, serialized };
     const timer = setTimeout(() => {
       lastSyncedLectureRef.current = serialized;
+      pendingLectureSaveRef.current = null;
       updateLecture(editingLecture.id, editingLecture);
     }, 550);
     return () => clearTimeout(timer);
   }, [editingLecture, updateLecture]);
+
+  const flushPendingLectureSave = () => {
+    const pending = pendingLectureSaveRef.current;
+    const latest = latestEditingLectureRef.current;
+    if (pending) {
+      lastSyncedLectureRef.current = pending.serialized;
+      pendingLectureSaveRef.current = null;
+      updateLectureRef.current(pending.lecture.id, pending.lecture);
+      return;
+    }
+    if (latest) {
+      const serialized = JSON.stringify(latest);
+      if (serialized !== lastSyncedLectureRef.current) {
+        lastSyncedLectureRef.current = serialized;
+        updateLectureRef.current(latest.id, latest);
+      }
+    }
+  };
+
+  const closeEditingLecture = () => {
+    flushPendingLectureSave();
+    setEditingLecture(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      flushPendingLectureSave();
+    };
+  }, []);
 
   // Debounced auto-save for Published Homework & Questions editing modal
   useEffect(() => {
@@ -651,6 +699,9 @@ export const AdminPanelModal: React.FC = () => {
 
     setVideoFileObj(file);
     setVideoFileUrl('');
+    setVideoDurationHms('');
+    setVideoDurationFormatted('');
+    setVideoLinkCheckMeta(null);
     if (!videoTitle) {
       setVideoTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
@@ -661,6 +712,7 @@ export const AdminPanelModal: React.FC = () => {
       if (probe && probe.durationSeconds > 0) {
         setVideoDuration(String(Math.max(1, Math.round(probe.durationSeconds / 60))));
         setVideoDurationFormatted(probe.formatted);
+        setVideoDurationHms(probe.hms);
       }
     } catch (err) {
       console.warn('Video duration probe error:', err);
@@ -736,6 +788,8 @@ export const AdminPanelModal: React.FC = () => {
 
     setDocFileObj(file);
     setDocFileUrl('');
+    setDocPageCount(null);
+    setDocLinkCheckMeta(null);
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'xlsx' || ext === 'xls') setDocFileType('xls');
     else if (ext === 'docx' || ext === 'doc') setDocFileType('doc');
@@ -744,6 +798,16 @@ export const AdminPanelModal: React.FC = () => {
 
     if (!fileTitle) {
       setFileTitle(file.name.replace(/\.[^/.]+$/, ''));
+    }
+
+    if (ext === 'pdf' || file.type === 'application/pdf') {
+      probePdfPageCount(file)
+        .then((pages) => {
+          if (pages && pages > 0) {
+            setDocPageCount(pages);
+          }
+        })
+        .catch(() => {});
     }
 
     const initialMb = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
@@ -1427,17 +1491,22 @@ export const AdminPanelModal: React.FC = () => {
       provider = 'other';
       original_url = finalVideoUrl;
     } else if (finalVideoUrl) {
-      // Check external YouTube or Google Drive video link with pure regex
+      // Check external YouTube, Google Drive, or direct HTTPS video link
       const parsed = parseVideoUrl(finalVideoUrl);
-      if (!parsed.isValid) {
-        showNotice(parsed.error || '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب أو جوجل درايف صالح.');
+      if (parsed.isValid) {
+        provider = parsed.provider;
+        external_id = parsed.id;
+        original_url = finalVideoUrl;
+        finalVideoUrl = parsed.embedUrl;
+        finalFileSize = parsed.provider === 'drive' ? 'Google Drive HD' : 'YouTube HD';
+      } else if (/^https?:\/\//i.test(finalVideoUrl)) {
+        provider = 'other';
+        original_url = finalVideoUrl;
+        finalFileSize = 'رابط فيديو مباشر';
+      } else {
+        showNotice(parsed.error || '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب أو جوجل درايف أو رابط فيديو مباشر صالح.');
         return;
       }
-      provider = parsed.provider;
-      external_id = parsed.id;
-      original_url = finalVideoUrl;
-      finalVideoUrl = parsed.embedUrl;
-      finalFileSize = parsed.provider === 'drive' ? 'Google Drive HD' : 'YouTube HD';
     }
 
     const createdLessons =
@@ -1491,6 +1560,9 @@ export const AdminPanelModal: React.FC = () => {
       setVideoChapter('');
       setVideoFileObj(null);
       setVideoFileUrl('');
+      setVideoDurationFormatted('');
+      setVideoDurationHms('');
+      setVideoLinkCheckMeta(null);
       setVideoUploadProgress(null);
       setVideoDesc('');
       setIsVideoFree(false);
@@ -1630,16 +1702,20 @@ export const AdminPanelModal: React.FC = () => {
       provider = 'other';
       original_url = finalUrl;
     } else if (finalUrl) {
-      // Check external Google Drive link with pure regex
+      // Check external Google Drive link or direct HTTPS document/PDF link
       const parsed = parseDriveUrl(finalUrl);
-      if (!parsed.isValid) {
-        showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط Google Drive صالح (/file/d/ID أو ?id=ID أو /open?id=ID).');
+      if (parsed.isValid) {
+        provider = 'drive';
+        external_id = parsed.id;
+        original_url = finalUrl;
+        finalUrl = parsed.previewUrl;
+      } else if (/^https?:\/\//i.test(finalUrl)) {
+        provider = 'other';
+        original_url = finalUrl;
+      } else {
+        showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط Google Drive أو رابط PDF مباشر صالح.');
         return;
       }
-      provider = 'drive';
-      external_id = parsed.id;
-      original_url = finalUrl;
-      finalUrl = parsed.previewUrl;
     }
 
     if (!finalUrl) {
@@ -1648,6 +1724,7 @@ export const AdminPanelModal: React.FC = () => {
     }
 
     try {
+      const targetFileName = docFileObj?.name || `${fileTitle.trim()}.${docFileType === 'image' ? 'png' : docFileType}`;
       const res = await addFile({
         title: fileTitle.trim(),
         category: fileCategory.trim() || 'مذكرات الشرح',
@@ -1655,7 +1732,7 @@ export const AdminPanelModal: React.FC = () => {
         courseId: fileCourseId || undefined,
         grade: fileGrade,
         fileUrl: finalUrl || '',
-        fileName: docFileObj?.name || `${fileTitle.trim()}.pdf`,
+        fileName: targetFileName,
         fileType: docFileType,
         sizeMb: finalSize,
         description: fileDesc,
@@ -1671,14 +1748,97 @@ export const AdminPanelModal: React.FC = () => {
         return;
       }
 
+      // If linked to a specific course, also attach immediately into the chosen lesson so it shows right away inside the lesson for Admin, Secretary & Student
+      if (fileCourseId) {
+        const targetCourse = lectures.find((l) => l.id === fileCourseId);
+        if (targetCourse) {
+          const existingLessons = [...getCourseLessons(targetCourse)];
+          const newSubSection: LessonSubSection = {
+            id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            title: fileTitle.trim(),
+            kind: 'pdf',
+            fileUrl: finalUrl,
+            fileName: targetFileName,
+            notes: fileDesc.trim() || undefined,
+            items: [
+              {
+                id: `item_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                title: fileTitle.trim(),
+                kind: 'pdf',
+                fileUrl: finalUrl,
+                fileName: targetFileName,
+                pageCount: docPageCount || undefined,
+                notes: fileDesc.trim() || undefined,
+                order: 1,
+              },
+            ],
+          };
+
+          const wantedLessonTitle = fileLessonTitle.trim();
+          let updatedLessons: CourseLesson[];
+          if (wantedLessonTitle) {
+            const matchIdx = existingLessons.findIndex(
+              (ls) => ls.title.trim().toLowerCase() === wantedLessonTitle.toLowerCase()
+            );
+            if (matchIdx >= 0) {
+              updatedLessons = existingLessons.map((ls, idx) =>
+                idx === matchIdx
+                  ? { ...ls, subSections: [...(ls.subSections || []), newSubSection] }
+                  : ls
+              );
+            } else {
+              updatedLessons = [
+                ...existingLessons,
+                {
+                  id: `lesson_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                  title: wantedLessonTitle,
+                  description: '',
+                  order: existingLessons.length + 1,
+                  subSections: [newSubSection],
+                },
+              ];
+            }
+          } else if (existingLessons.length > 0) {
+            updatedLessons = existingLessons.map((ls, idx) =>
+              idx === 0
+                ? { ...ls, subSections: [...(ls.subSections || []), newSubSection] }
+                : ls
+            );
+          } else {
+            updatedLessons = [
+              {
+                id: `lesson_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                title: 'الدرس 1: مذكرات وملفات الكورس',
+                description: '',
+                order: 1,
+                subSections: [newSubSection],
+              },
+            ];
+          }
+
+          await updateLecture(targetCourse.id, {
+            lessons: updatedLessons,
+            draftLessons: updatedLessons,
+            isPublished: true,
+            lastPublishedAt: new Date().toISOString(),
+          });
+        }
+      }
+
       setFileTitle('');
       setFileLessonTitle('');
       setFileCourseId('');
       setDocFileObj(null);
       setDocFileUrl('');
+      setDocPageCount(null);
+      setDocLinkCheckMeta(null);
       setDocUploadProgress(null);
       setFileDesc('');
-      showNotice('⚡ تم حفظ المذكرة بنجاح في قاعدة البيانات Supabase!');
+      showNotice(
+        fileCourseId
+          ? '⚡ تم حفظ المذكرة وإدراجها فوراً داخل الدرس المختار في الكورس بنجاح!'
+          : '⚡ تم حفظ المذكرة بنجاح في قاعدة البيانات Supabase!'
+      );
     } catch (err: any) {
       console.error('[AdminPanel AddFile Exception]:', err);
       showNotice(`❌ خطأ غير متوقع: ${err?.message || err}`);
@@ -3063,7 +3223,13 @@ export const AdminPanelModal: React.FC = () => {
                 {/* Real Upload Progress Bar with exact duration & speed */}
                 {renderUploadProgressBar(
                   videoUploadProgress,
-                  videoDurationFormatted ? `⏱️ مدة الفيديو المقروءة بدقة من الملف: ${videoDurationFormatted}` : undefined
+                  videoDurationHms || videoDurationFormatted
+                    ? `⏱️ مدة الفيديو المقروءة بدقة من الملف: ${
+                        videoDurationHms
+                          ? `${videoDurationHms}${videoDurationFormatted ? ` (${videoDurationFormatted})` : ''}`
+                          : videoDurationFormatted
+                      }`
+                    : undefined
                 )}
 
                 {/* Alternative: External Video URL (YouTube or Google Drive) */}
@@ -3077,6 +3243,7 @@ export const AdminPanelModal: React.FC = () => {
                       value={videoFileObj ? '' : videoFileUrl}
                       onChange={(e) => {
                         setVideoFileUrl(e.target.value);
+                        setVideoLinkCheckMeta(null);
                         if (e.target.value) setVideoFileObj(null);
                       }}
                       placeholder={
@@ -3089,37 +3256,63 @@ export const AdminPanelModal: React.FC = () => {
                     {videoFileUrl && !videoFileObj && !/supabase\.co\/storage\/v1\/object\//i.test(videoFileUrl) && (
                       <button
                         type="button"
-                        onClick={() => {
+                        disabled={isVerifyingVideoLink}
+                        onClick={async () => {
                           if (!videoFileUrl.trim()) {
-                            showNotice('يرجى إدخال رابط يوتيوب أو جوجل درايف أولاً.');
+                            showNotice('يرجى إدخال رابط فيديو صالح أولاً.');
                             return;
                           }
-                          const parsed = parseVideoUrl(videoFileUrl);
-                          if (!parsed.isValid) {
-                            showNotice(parsed.error || '⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط يوتيوب أو جوجل درايف صالح.');
-                            return;
+                          setIsVerifyingVideoLink(true);
+                          try {
+                            const meta = await LinkVerificationService.verifyUrl(videoFileUrl, 'video');
+                            if (!meta.isValid) {
+                              showNotice(meta.error || '⚠️ تعذر التحقق من الرابط. يرجى التأكد من صحة الرابط.');
+                              return;
+                            }
+                            if (meta.sanitizedUrl) {
+                              setVideoFileUrl(meta.sanitizedUrl);
+                            }
+                            if (!videoTitle.trim() && meta.title) {
+                              setVideoTitle(meta.title);
+                            }
+                            if (meta.durationMinutes && meta.durationMinutes > 0) {
+                              setVideoDuration(String(meta.durationMinutes));
+                            }
+                            if (meta.durationFormatted) {
+                              setVideoDurationFormatted(meta.durationFormatted);
+                            }
+                            if (meta.durationHms) {
+                              setVideoDurationHms(meta.durationHms);
+                            }
+                            const durationSummary = meta.durationHms
+                              ? `المدة: ${meta.durationHms}${meta.durationFormatted ? ` (${meta.durationFormatted})` : ''}`
+                              : meta.durationFormatted
+                              ? `المدة: ${meta.durationFormatted}`
+                              : 'رابط صالح وجاهز للتشغيل';
+                            setVideoLinkCheckMeta(`✅ تم فحص الرابط بنجاح · ${durationSummary}${meta.fileSizeFormatted && meta.fileSizeFormatted !== 'بث مباشر' ? ` · الحجم: ${meta.fileSizeFormatted}` : ''}`);
+                            showNotice(`✅ تم فحص رابط الفيديو بنجاح — ${durationSummary}`);
+                          } catch (err: any) {
+                            showNotice(`⚠️ تعذر فحص الرابط: ${err?.message || 'تحقق من الاتصال'}`);
+                          } finally {
+                            setIsVerifyingVideoLink(false);
                           }
-                          setVideoFileUrl(parsed.embedUrl);
-                          if (!videoTitle) {
-                            setVideoTitle(
-                              parsed.provider === 'drive'
-                                ? `محاضرة كيمياء (Drive) - ${parsed.id.substring(0, 8)}`
-                                : `محاضرة كيمياء - فيديو ${parsed.id}`
-                            );
-                          }
-                          showNotice(
-                            parsed.provider === 'drive'
-                              ? `✅ تم تحويل رابط Google Drive للبث المباشر بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`
-                              : `✅ تم التحقق من رابط يوتيوب بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`
-                          );
                         }}
-                        className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                        className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
                       >
-                        <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-                        <span>تأكيد وفحص الرابط</span>
+                        {isVerifyingVideoLink ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                        )}
+                        <span>{isVerifyingVideoLink ? 'جارِ الفحص...' : 'تأكيد وفحص الرابط'}</span>
                       </button>
                     )}
                   </div>
+                  {videoLinkCheckMeta && (
+                    <div className="text-[11px] font-bold text-emerald-300 bg-emerald-950/30 border border-emerald-700/40 rounded-lg px-3 py-1.5">
+                      {videoLinkCheckMeta}
+                    </div>
+                  )}
                   <p className="text-[10px] text-cyan-400">
                     🔒 مشغل المنصة الخاص: يدعم روابط YouTube وروابط فيديو Google Drive (بعد ضبط الصلاحية إلى "أي شخص لديه الرابط") ويعرضها بملء الشاشة بدون شعارات أو نوافذ خارجية.
                   </p>
@@ -4368,12 +4561,15 @@ export const AdminPanelModal: React.FC = () => {
                 </div>
 
                 {/* Real Upload Progress Bar for Documents */}
-                {renderUploadProgressBar(docUploadProgress)}
+                {renderUploadProgressBar(
+                  docUploadProgress,
+                  docPageCount ? `📄 عدد الصفحات المقروءة بدقة من الملف: ${docPageCount} صفحة` : undefined
+                )}
 
                 {/* Alternative: External Document URL */}
                 <div className="p-3.5 bg-[#050811] border border-cyan-950 rounded-xl space-y-2">
                   <label className="block text-xs font-semibold text-slate-300">
-                    أو إضافة برابط Google Drive (/file/d/ID أو ?id=ID أو /open?id=ID):
+                    أو إضافة برابط Google Drive (/file/d/ID أو ?id=ID أو /open?id=ID) أو رابط PDF مباشر:
                   </label>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <input
@@ -4381,6 +4577,8 @@ export const AdminPanelModal: React.FC = () => {
                       value={docFileObj ? '' : docFileUrl}
                       onChange={(e) => {
                         setDocFileUrl(e.target.value);
+                        setDocLinkCheckMeta(null);
+                        setDocPageCount(null);
                         if (e.target.value) setDocFileObj(null);
                       }}
                       placeholder={
@@ -4393,30 +4591,60 @@ export const AdminPanelModal: React.FC = () => {
                     {docFileUrl && !docFileObj && !/supabase\.co\/storage\/v1\/object\//i.test(docFileUrl) && (
                       <button
                         type="button"
-                        onClick={() => {
+                        disabled={isVerifyingDocLink}
+                        onClick={async () => {
                           if (!docFileUrl.trim()) {
-                            showNotice('يرجى إدخال رابط Google Drive أولاً.');
+                            showNotice('يرجى إدخال رابط المستند أولاً.');
                             return;
                           }
-                          const parsed = parseDriveUrl(docFileUrl);
-                          if (!parsed.isValid) {
-                            showNotice('⚠️ صيغة الرابط غير صحيحة. يرجى إدخال رابط Google Drive صالح (/file/d/ID أو ?id=ID أو /open?id=ID).');
-                            return;
+                          setIsVerifyingDocLink(true);
+                          try {
+                            const meta = await LinkVerificationService.verifyUrl(docFileUrl, 'document');
+                            if (!meta.isValid) {
+                              showNotice(meta.error || '⚠️ تعذر التحقق من رابط المستند.');
+                              return;
+                            }
+                            if (meta.sanitizedUrl) {
+                              setDocFileUrl(meta.sanitizedUrl);
+                            }
+                            if (meta.category === 'doc' || meta.category === 'xls' || meta.category === 'image' || meta.category === 'pdf') {
+                              setDocFileType(meta.category);
+                            } else {
+                              setDocFileType('pdf');
+                            }
+                            if (!fileTitle.trim() && meta.title) {
+                              setFileTitle(meta.title);
+                            }
+                            if (meta.pageCount && meta.pageCount > 0) {
+                              setDocPageCount(meta.pageCount);
+                            }
+                            const pagesLabel = meta.pageCount ? `${meta.pageCount} صفحة` : 'تم التحقق من صلاحية الملف';
+                            setDocLinkCheckMeta(
+                              `✅ تم فحص الرابط بنجاح · ${pagesLabel}${meta.fileSizeFormatted && meta.fileSizeFormatted !== 'بث مباشر' ? ` · ${meta.fileSizeFormatted}` : ''}`
+                            );
+                            showNotice(`✅ تم فحص رابط المستند بنجاح — ${pagesLabel}`);
+                          } catch (err: any) {
+                            showNotice(`⚠️ تعذر فحص الرابط: ${err?.message || 'تحقق من الاتصال'}`);
+                          } finally {
+                            setIsVerifyingDocLink(false);
                           }
-                          setDocFileUrl(parsed.previewUrl);
-                          setDocFileType('pdf');
-                          if (!fileTitle) {
-                            setFileTitle(`مذكرة كيمياء - ملف ${parsed.id.slice(0, 8)}`);
-                          }
-                          showNotice(`✅ تم التحقق من رابط Google Drive بنجاح (معرف: ${parsed.id}) وجاهز للحفظ في Supabase!`);
                         }}
-                        className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                        className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
                       >
-                        <CheckCircle2 className="w-4 h-4 text-white" />
-                        <span>تأكيد وفحص الرابط</span>
+                        {isVerifyingDocLink ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4 text-white" />
+                        )}
+                        <span>{isVerifyingDocLink ? 'جارِ الفحص...' : 'تأكيد وفحص الرابط'}</span>
                       </button>
                     )}
                   </div>
+                  {docLinkCheckMeta && (
+                    <div className="text-[11px] font-bold text-emerald-300 bg-emerald-950/30 border border-emerald-700/40 rounded-lg px-3 py-1.5">
+                      {docLinkCheckMeta}
+                    </div>
+                  )}
                   <p className="text-[10px] text-cyan-400">
                     🔒 عارض معزول بالكامل: تفتح مستندات Google Drive داخل عارض المنصة المدمج فقط مع حجب أيقونة الخروج والتنزيل الخارجي.
                   </p>
@@ -4463,11 +4691,21 @@ export const AdminPanelModal: React.FC = () => {
                     <label className="block text-xs text-slate-300 mb-1">الدرس / المحاضرة التابع لها (للعرض الهرمي المنسدل)</label>
                     <input
                       type="text"
+                      list="course-file-lessons-list"
                       value={fileLessonTitle}
                       onChange={(e) => setFileLessonTitle(e.target.value)}
                       placeholder="مثال: الدرس الأول: العناصر الانتقالية"
                       className="w-full bg-[#050811] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
+                    <datalist id="course-file-lessons-list">
+                      {(() => {
+                        const chosenCourse = lectures.find((l) => l.id === fileCourseId);
+                        if (!chosenCourse) return null;
+                        return getCourseLessons(chosenCourse).map((ls) => (
+                          <option key={ls.id} value={ls.title} />
+                        ));
+                      })()}
+                    </datalist>
                   </div>
 
                   <div>
@@ -7271,7 +7509,7 @@ ALTER TABLE public.recharge_codes DISABLE ROW LEVEL SECURITY;`;
                 </span>
                 <button
                   type="button"
-                  onClick={() => setEditingLecture(null)}
+                  onClick={closeEditingLecture}
                   className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5" />
@@ -7386,7 +7624,7 @@ ALTER TABLE public.recharge_codes DISABLE ROW LEVEL SECURITY;`;
             <div className="flex flex-wrap items-center justify-end gap-2.5 pt-3 border-t border-cyan-900/40">
               <button
                 type="button"
-                onClick={() => setEditingLecture(null)}
+                onClick={closeEditingLecture}
                 className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs cursor-pointer transition-colors"
               >
                 إغلاق
@@ -7402,6 +7640,8 @@ ALTER TABLE public.recharge_codes DISABLE ROW LEVEL SECURITY;`;
                     isPublished: true,
                     lastPublishedAt: new Date().toISOString(),
                   };
+                  pendingLectureSaveRef.current = null;
+                  lastSyncedLectureRef.current = JSON.stringify(publishedCourse);
                   updateLecture(editingLecture.id, publishedCourse);
                   setEditingLecture(null);
                   showNotice('⚡ تم حفظ ونشر الكورس وجميع المحاضرات على المنصة وقاعدة البيانات بنجاح!');

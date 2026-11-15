@@ -39,7 +39,13 @@ import {
 } from '../utils/courseCovers';
 import { parseDriveUrl, parseVideoUrl } from '../utils/linkParser';
 import { usePlatform } from '../context/PlatformContext';
-import { ProgressPayload } from '../utils/realUploader';
+import {
+  formatSecondsToHMS,
+  probePdfPageCount,
+  probeVideoDuration,
+  ProgressPayload,
+} from '../utils/realUploader';
+import { LinkVerificationService } from '../utils/LinkVerificationService';
 import {
   SUPABASE_FILES_BUCKET,
   SUPABASE_LECTURES_BUCKET,
@@ -85,10 +91,14 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
   >({});
   const [newItemKindDrafts, setNewItemKindDrafts] = useState<Record<string, LessonSectionKind>>({});
   const [uploadingKey, setUploadingKey] = useState<string | null>(null);
+  const [verifyingItemKey, setVerifyingItemKey] = useState<string | null>(null);
   const [uploadProgressState, setUploadProgressState] = useState<{
     key: string;
     fileName: string;
     bucket: string;
+    status: 'uploading' | 'completed' | 'error';
+    metaText?: string;
+    errorMessage?: string;
     progress: ProgressPayload;
   } | null>(null);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
@@ -121,22 +131,31 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
         order: sIdx + 1,
       })),
     }));
-    onChange({ draftLessons: normalized });
+    onChange({
+      lessons: normalized,
+      draftLessons: normalized,
+      isPublished: true,
+      lastPublishedAt: new Date().toISOString(),
+    });
   };
 
   const uploadDirectToBucket = async (
     file: File,
     key: string,
-    bucket: typeof SUPABASE_FILES_BUCKET | typeof SUPABASE_LECTURES_BUCKET
+    bucket: typeof SUPABASE_FILES_BUCKET | typeof SUPABASE_LECTURES_BUCKET,
+    initialMetaText?: string
   ) => {
     setUploadingKey(key);
     setErrorNotice(null);
+    let latestMetaText = initialMetaText;
     setUploadProgressState({
       key,
       fileName: file.name,
       bucket,
+      status: 'uploading',
+      metaText: latestMetaText,
       progress: {
-        percent: 5,
+        percent: 0,
         loadedFormatted: '0 B',
         totalFormatted: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
         speed: 'اتصال مباشر',
@@ -150,18 +169,40 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
       const result = await uploadFileToSupabaseDirect(file, {
         bucket,
         onProgress: (p) => {
-          setUploadProgressState({
+          setUploadProgressState((prev) => ({
             key,
             fileName: file.name,
             bucket,
+            status: p.percent >= 100 ? 'completed' : 'uploading',
+            metaText: prev?.metaText ?? latestMetaText,
             progress: p,
-          });
+          }));
         },
       });
+      setUploadProgressState((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'completed',
+              progress: { ...prev.progress, percent: 100, speed: 'مكتمل', remaining: '0 ثانية' },
+            }
+          : null
+      );
       return result;
+    } catch (err: any) {
+      const msg = err?.message || String(err || 'فشل الرفع إلى Supabase Storage');
+      setUploadProgressState((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'error',
+              errorMessage: msg,
+            }
+          : null
+      );
+      throw err;
     } finally {
       setUploadingKey(null);
-      setUploadProgressState(null);
     }
   };
 
@@ -192,17 +233,116 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
     const targetBucket =
       kind === 'video' ? SUPABASE_LECTURES_BUCKET : SUPABASE_FILES_BUCKET;
     try {
-      const result = await uploadDirectToBucket(file, uploadKey, targetBucket);
+      let videoProbe: { durationSeconds: number; formatted: string; hms: string } | null = null;
+      let pdfPages: number | null = null;
+      let metaText: string | undefined;
+
+      if (kind === 'video') {
+        videoProbe = await probeVideoDuration(file);
+        if (videoProbe.durationSeconds > 0) {
+          metaText = `⏱️ المدة: ${videoProbe.hms} (${videoProbe.formatted})`;
+        }
+      } else {
+        pdfPages = await probePdfPageCount(file);
+        if (pdfPages && pdfPages > 0) {
+          metaText = `📄 عدد الصفحات: ${pdfPages} صفحة`;
+        }
+      }
+
+      const result = await uploadDirectToBucket(file, uploadKey, targetBucket, metaText);
+      if (metaText) {
+        setUploadProgressState((prev) => (prev ? { ...prev, metaText } : prev));
+      }
+
       updateSectionItem(lessonId, subId, itemId, {
         ...(kind === 'video'
-          ? { videoUrl: result.url }
-          : { fileUrl: result.url, fileName: file.name }),
+          ? {
+              videoUrl: result.url,
+              ...(videoProbe && videoProbe.durationSeconds > 0
+                ? {
+                    durationSeconds: videoProbe.durationSeconds,
+                    durationFormatted: videoProbe.formatted,
+                    durationHms: videoProbe.hms,
+                  }
+                : {}),
+            }
+          : {
+              fileUrl: result.url,
+              fileName: file.name,
+              ...(pdfPages && pdfPages > 0 ? { pageCount: pdfPages } : {}),
+            }),
       });
-      flashNotice(`${result.diagnosticMessage} (${file.name})`);
+      flashNotice(
+        `${result.diagnosticMessage} (${file.name})${metaText ? ` · ${metaText}` : ''}`
+      );
     } catch (err: any) {
       flashError(`فشل رفع (${file.name}): ${err?.message || err}`);
     } finally {
       e.target.value = '';
+    }
+  };
+
+  const handleVerifyItemLink = async (
+    lessonId: string,
+    subId: string,
+    item: LessonSectionItem
+  ) => {
+    const rawTarget =
+      item.kind === 'video'
+        ? item.videoUrl || ''
+        : item.kind === 'pdf' || item.kind === 'homework'
+        ? item.fileUrl || item.externalUrl || ''
+        : item.externalUrl || '';
+
+    if (!rawTarget.trim()) {
+      flashError('أدخل الرابط أولاً قبل الفحص والتحقق.');
+      return;
+    }
+
+    const itemKey = `${subId}:${item.id}`;
+    setVerifyingItemKey(itemKey);
+    try {
+      const targetKind = item.kind === 'video' ? 'video' : 'document';
+      const meta = await LinkVerificationService.verifyUrl(rawTarget, targetKind);
+      if (!meta.isValid) {
+        flashError(meta.error || 'الرابط غير صالح أو تعذر التحقق منه.');
+        return;
+      }
+
+      const patch: Partial<LessonSectionItem> = {};
+      if (item.kind === 'video') {
+        patch.videoUrl = meta.sanitizedUrl;
+        if (meta.durationSeconds && meta.durationSeconds > 0) {
+          patch.durationSeconds = meta.durationSeconds;
+          patch.durationFormatted = meta.durationFormatted;
+          patch.durationHms = meta.durationHms || formatSecondsToHMS(meta.durationSeconds);
+        }
+      } else if (item.kind === 'pdf' || item.kind === 'homework') {
+        if (item.fileUrl) patch.fileUrl = meta.sanitizedUrl;
+        else patch.externalUrl = meta.sanitizedUrl;
+        if (meta.pageCount && meta.pageCount > 0) {
+          patch.pageCount = meta.pageCount;
+        }
+      } else {
+        patch.externalUrl = meta.sanitizedUrl;
+        if (meta.pageCount && meta.pageCount > 0) patch.pageCount = meta.pageCount;
+        if (meta.durationSeconds && meta.durationSeconds > 0) {
+          patch.durationSeconds = meta.durationSeconds;
+          patch.durationFormatted = meta.durationFormatted;
+          patch.durationHms = meta.durationHms;
+        }
+      }
+
+      updateSectionItem(lessonId, subId, item.id, patch);
+      const summaryParts = ['✅ تم التحقق من الرابط وحفظه في الدرس بنجاح'];
+      if (meta.durationHms) summaryParts.push(`⏱️ المدة: ${meta.durationHms}`);
+      else if (meta.durationFormatted) summaryParts.push(`⏱️ المدة: ${meta.durationFormatted}`);
+      if (meta.pageCount) summaryParts.push(`📄 عدد الصفحات: ${meta.pageCount} صفحة`);
+      flashNotice(summaryParts.join(' · '));
+    } catch (err: any) {
+      flashError(`تعذر فحص الرابط: ${err?.message || err}`);
+    } finally {
+      setVerifyingItemKey(null);
     }
   };
 
@@ -217,7 +357,7 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
     setDraftLessons(updated);
     setExpandedLessons((prev) => ({ ...prev, [created.id]: true }));
     setNewLessonTitle('');
-    flashNotice(`تمت إضافة (${created.title}) كمسودة — أضف الأقسام التي تريدها بداخله.`);
+    flashNotice(`تمت إضافة (${created.title}) للكورس — أضف الأقسام والعناصر التي تريدها بداخله.`);
   };
 
   const handleRemoveLesson = (lessonId: string) => {
@@ -428,7 +568,7 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
   // ==================== DRAFT SAVE & PUBLISH TARGET MODAL ====================
   const handleSaveDraftOnly = () => {
     setDraftLessons(lessons);
-    flashNotice('تم حفظ كافة التعديلات كمسودة بأمان — لن تظهر للطلاب حتى تضغط "حفظ ونشر".');
+    flashNotice('تم حفظ كافة التعديلات ومزامنتها داخل الكورس والقاعدة بنجاح.');
   };
 
   const openPublishModal = () => {
@@ -591,27 +731,80 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
       )}
 
       {uploadProgressState && (
-        <div className="p-3 rounded-xl bg-[#050c1e] border border-cyan-500/40 space-y-2 shadow-lg">
+        <div
+          className={`p-3 rounded-xl bg-[#050c1e] space-y-2 shadow-lg border ${
+            uploadProgressState.status === 'error'
+              ? 'border-red-500/60'
+              : uploadProgressState.status === 'completed'
+              ? 'border-emerald-500/50'
+              : 'border-cyan-500/40'
+          }`}
+        >
           <div className="flex items-center justify-between gap-2 text-xs">
             <span className="font-bold text-white truncate">
-              جاري الرفع إلى {uploadProgressState.bucket}: {uploadProgressState.fileName}
+              {uploadProgressState.status === 'error'
+                ? `فشل الرفع إلى ${uploadProgressState.bucket}: ${uploadProgressState.fileName}`
+                : uploadProgressState.status === 'completed'
+                ? `تم الرفع إلى ${uploadProgressState.bucket}: ${uploadProgressState.fileName}`
+                : `جاري الرفع إلى ${uploadProgressState.bucket}: ${uploadProgressState.fileName}`}
             </span>
-            <span className="font-mono font-bold text-cyan-400">
-              {uploadProgressState.progress.percent}%
-            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span
+                className={`font-mono font-bold ${
+                  uploadProgressState.status === 'error'
+                    ? 'text-red-400'
+                    : uploadProgressState.status === 'completed'
+                    ? 'text-emerald-400'
+                    : 'text-cyan-400'
+                }`}
+              >
+                {uploadProgressState.progress.percent}%
+              </span>
+              {uploadProgressState.status !== 'uploading' && (
+                <button
+                  type="button"
+                  onClick={() => setUploadProgressState(null)}
+                  className="p-0.5 text-slate-400 hover:text-white cursor-pointer"
+                  aria-label="إغلاق شريط التقدم"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
-          <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+          <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-200"
+              className={`h-full transition-all duration-200 ${
+                uploadProgressState.status === 'error'
+                  ? 'bg-red-500'
+                  : uploadProgressState.status === 'completed'
+                  ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                  : 'bg-gradient-to-r from-cyan-500 to-blue-500'
+              }`}
               style={{ width: `${uploadProgressState.progress.percent}%` }}
             />
           </div>
-          <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-300 font-mono">
             <span>
               {uploadProgressState.progress.loadedFormatted} / {uploadProgressState.progress.totalFormatted}
             </span>
-            <span>{uploadProgressState.progress.speed}</span>
+            <span>
+              {uploadProgressState.progress.speed}
+              {uploadProgressState.status === 'uploading' && uploadProgressState.progress.remaining
+                ? ` · متبقي: ${uploadProgressState.progress.remaining}`
+                : ''}
+            </span>
           </div>
+          {uploadProgressState.metaText && (
+            <div className="text-[11px] font-bold text-amber-300 bg-amber-950/30 border border-amber-700/30 px-2.5 py-1.5 rounded-lg">
+              {uploadProgressState.metaText}
+            </div>
+          )}
+          {uploadProgressState.errorMessage && (
+            <div className="text-[11px] font-bold text-red-200 bg-red-950/50 border border-red-700/40 px-2.5 py-1.5 rounded-lg break-all">
+              {uploadProgressState.errorMessage}
+            </div>
+          )}
         </div>
       )}
 
@@ -1141,41 +1334,66 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
 
                                             {/* Dynamic Fields by Item Kind */}
                                             {item.kind === 'video' && (
-                                              <div className="flex flex-wrap items-center gap-2">
-                                                <input
-                                                  type="text"
-                                                  value={item.videoUrl || ''}
-                                                  onChange={(e) => {
-                                                    const raw = e.target.value;
-                                                    const parsed = parseVideoUrl(raw);
-                                                    updateSectionItem(lesson.id, sub.id, item.id, {
-                                                      videoUrl: parsed.isValid ? parsed.embedUrl : raw,
-                                                    });
-                                                  }}
-                                                  placeholder="رابط فيديو YouTube أو Google Drive أو مسار مرفوع..."
-                                                  className="flex-1 min-w-[180px] bg-[#050811] border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono focus:outline-none focus:border-cyan-400"
-                                                  dir="ltr"
-                                                />
-                                                <label className="px-2.5 py-1.5 rounded-lg bg-cyan-950/60 border border-cyan-700/40 text-cyan-300 font-bold cursor-pointer flex items-center gap-1 shrink-0">
-                                                  <Upload className="w-3 h-3" />
-                                                  <span>
-                                                    {isItemUploading ? 'جاري الرفع...' : 'رفع فيديو'}
-                                                  </span>
+                                              <div className="space-y-1.5">
+                                                <div className="flex flex-wrap items-center gap-2">
                                                   <input
-                                                    type="file"
-                                                    accept="video/*"
-                                                    onChange={(e) =>
-                                                      handleItemFileUpload(
-                                                        lesson.id,
-                                                        sub.id,
-                                                        item.id,
-                                                        'video',
-                                                        e
-                                                      )
-                                                    }
-                                                    className="hidden"
+                                                    type="text"
+                                                    value={item.videoUrl || ''}
+                                                    onChange={(e) => {
+                                                      const raw = e.target.value;
+                                                      const parsed = parseVideoUrl(raw);
+                                                      updateSectionItem(lesson.id, sub.id, item.id, {
+                                                        videoUrl: parsed.isValid ? parsed.embedUrl : raw,
+                                                      });
+                                                    }}
+                                                    placeholder="رابط فيديو YouTube أو Google Drive أو مسار مرفوع..."
+                                                    className="flex-1 min-w-[180px] bg-[#050811] border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono focus:outline-none focus:border-cyan-400"
+                                                    dir="ltr"
                                                   />
-                                                </label>
+                                                  {item.videoUrl && (
+                                                    <button
+                                                      type="button"
+                                                      disabled={verifyingItemKey === `${sub.id}:${item.id}`}
+                                                      onClick={() => handleVerifyItemLink(lesson.id, sub.id, item)}
+                                                      className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-bold cursor-pointer flex items-center gap-1 shrink-0 disabled:opacity-50"
+                                                    >
+                                                      <CheckCircle2 className="w-3 h-3" />
+                                                      <span>
+                                                        {verifyingItemKey === `${sub.id}:${item.id}`
+                                                          ? 'جاري الفحص...'
+                                                          : 'فحص الرابط'}
+                                                      </span>
+                                                    </button>
+                                                  )}
+                                                  <label className="px-2.5 py-1.5 rounded-lg bg-cyan-950/60 border border-cyan-700/40 text-cyan-300 font-bold cursor-pointer flex items-center gap-1 shrink-0">
+                                                    <Upload className="w-3 h-3" />
+                                                    <span>
+                                                      {isItemUploading ? 'جاري الرفع...' : 'رفع فيديو'}
+                                                    </span>
+                                                    <input
+                                                      type="file"
+                                                      accept="video/*"
+                                                      onChange={(e) =>
+                                                        handleItemFileUpload(
+                                                          lesson.id,
+                                                          sub.id,
+                                                          item.id,
+                                                          'video',
+                                                          e
+                                                        )
+                                                      }
+                                                      className="hidden"
+                                                    />
+                                                  </label>
+                                                </div>
+                                                {(item.durationHms || item.durationFormatted) && (
+                                                  <div className="text-[10px] font-bold text-amber-300 bg-amber-950/30 border border-amber-800/30 px-2 py-1 rounded-md inline-flex items-center gap-1.5">
+                                                    <span>
+                                                      ⏱️ مدة الفيديو: {item.durationHms || ''}
+                                                      {item.durationFormatted ? ` (${item.durationFormatted})` : ''}
+                                                    </span>
+                                                  </div>
+                                                )}
                                               </div>
                                             )}
 
@@ -1196,6 +1414,21 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
                                                     className="flex-1 min-w-[180px] bg-[#050811] border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono focus:outline-none focus:border-cyan-400"
                                                     dir="ltr"
                                                   />
+                                                  {item.fileUrl && (
+                                                    <button
+                                                      type="button"
+                                                      disabled={verifyingItemKey === `${sub.id}:${item.id}`}
+                                                      onClick={() => handleVerifyItemLink(lesson.id, sub.id, item)}
+                                                      className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-bold cursor-pointer flex items-center gap-1 shrink-0 disabled:opacity-50"
+                                                    >
+                                                      <CheckCircle2 className="w-3 h-3" />
+                                                      <span>
+                                                        {verifyingItemKey === `${sub.id}:${item.id}`
+                                                          ? 'جاري الفحص...'
+                                                          : 'فحص الرابط'}
+                                                      </span>
+                                                    </button>
+                                                  )}
                                                   <label className="px-2.5 py-1.5 rounded-lg bg-blue-950/60 border border-blue-700/40 text-blue-300 font-bold cursor-pointer flex items-center gap-1 shrink-0">
                                                     <Upload className="w-3 h-3" />
                                                     <span>
@@ -1217,6 +1450,11 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
                                                     />
                                                   </label>
                                                 </div>
+                                                {item.pageCount && item.pageCount > 0 && (
+                                                  <div className="text-[10px] font-bold text-cyan-300 bg-cyan-950/30 border border-cyan-800/30 px-2 py-1 rounded-md inline-flex items-center gap-1.5">
+                                                    <span>📄 عدد الصفحات: {item.pageCount} صفحة</span>
+                                                  </div>
+                                                )}
                                                 {files.length > 0 && (
                                                   <select
                                                     value=""
@@ -1280,6 +1518,21 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
                                                     className="flex-1 min-w-[160px] bg-[#050811] border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono"
                                                     dir="ltr"
                                                   />
+                                                  {item.fileUrl && (
+                                                    <button
+                                                      type="button"
+                                                      disabled={verifyingItemKey === `${sub.id}:${item.id}`}
+                                                      onClick={() => handleVerifyItemLink(lesson.id, sub.id, item)}
+                                                      className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-bold cursor-pointer flex items-center gap-1 shrink-0 disabled:opacity-50"
+                                                    >
+                                                      <CheckCircle2 className="w-3 h-3" />
+                                                      <span>
+                                                        {verifyingItemKey === `${sub.id}:${item.id}`
+                                                          ? 'جاري الفحص...'
+                                                          : 'فحص الرابط'}
+                                                      </span>
+                                                    </button>
+                                                  )}
                                                   <label className="px-2.5 py-1.5 rounded-lg bg-amber-950/60 border border-amber-700/40 text-amber-300 font-bold cursor-pointer flex items-center gap-1 shrink-0">
                                                     <Upload className="w-3 h-3" />
                                                     <span>
@@ -1301,6 +1554,11 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
                                                     />
                                                   </label>
                                                 </div>
+                                                {item.pageCount && item.pageCount > 0 && (
+                                                  <div className="text-[10px] font-bold text-amber-300 bg-amber-950/30 border border-amber-800/30 px-2 py-1 rounded-md inline-flex items-center gap-1.5">
+                                                    <span>📄 عدد الصفحات: {item.pageCount} صفحة</span>
+                                                  </div>
+                                                )}
                                               </div>
                                             )}
 
@@ -1340,18 +1598,43 @@ export const CourseCurriculumManager: React.FC<CourseCurriculumManagerProps> = (
                                             )}
 
                                             {item.kind === 'link' && (
-                                              <input
-                                                type="text"
-                                                value={item.externalUrl || ''}
-                                                onChange={(e) =>
-                                                  updateSectionItem(lesson.id, sub.id, item.id, {
-                                                    externalUrl: e.target.value,
-                                                  })
-                                                }
-                                                placeholder="الرابط الخارجي أو المرجع (https://...)..."
-                                                className="w-full bg-[#050811] border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono"
-                                                dir="ltr"
-                                              />
+                                              <div className="space-y-1.5">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                  <input
+                                                    type="text"
+                                                    value={item.externalUrl || ''}
+                                                    onChange={(e) =>
+                                                      updateSectionItem(lesson.id, sub.id, item.id, {
+                                                        externalUrl: e.target.value,
+                                                      })
+                                                    }
+                                                    placeholder="الرابط الخارجي أو المرجع (https://...)..."
+                                                    className="flex-1 min-w-[180px] bg-[#050811] border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono"
+                                                    dir="ltr"
+                                                  />
+                                                  {item.externalUrl && (
+                                                    <button
+                                                      type="button"
+                                                      disabled={verifyingItemKey === `${sub.id}:${item.id}`}
+                                                      onClick={() => handleVerifyItemLink(lesson.id, sub.id, item)}
+                                                      className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 font-bold cursor-pointer flex items-center gap-1 shrink-0 disabled:opacity-50"
+                                                    >
+                                                      <CheckCircle2 className="w-3 h-3" />
+                                                      <span>
+                                                        {verifyingItemKey === `${sub.id}:${item.id}`
+                                                          ? 'جاري الفحص...'
+                                                          : 'فحص الرابط'}
+                                                      </span>
+                                                    </button>
+                                                  )}
+                                                </div>
+                                                {(item.pageCount || item.durationHms) && (
+                                                  <div className="text-[10px] font-bold text-cyan-300 bg-cyan-950/30 border border-cyan-800/30 px-2 py-1 rounded-md inline-flex items-center gap-2">
+                                                    {item.durationHms && <span>⏱️ {item.durationHms}</span>}
+                                                    {item.pageCount && <span>📄 {item.pageCount} صفحة</span>}
+                                                  </div>
+                                                )}
+                                              </div>
                                             )}
 
                                             {item.kind === 'text' && (

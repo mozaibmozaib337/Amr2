@@ -1,5 +1,6 @@
-import { getSupabase } from '../services/supabaseService';
 import { formatBytes, formatDurationArabic, ProgressPayload } from './realUploader';
+import { fetchDocumentAsBlob, loadPdfFromBytes } from './pdfRenderer';
+import { cleanupVideoElement } from './mediaSession';
 
 export interface LinkAnalysisResult {
   url: string;
@@ -32,7 +33,7 @@ export function normalizeMediaLink(rawUrl: string): {
     const videoId = ytMatch[1];
     return {
       normalizedUrl: `https://www.youtube.com/watch?v=${videoId}`,
-      embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&controls=1&playsinline=1`,
+      embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=0&enablejsapi=1&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&controls=1&playsinline=1`,
       platform: 'youtube',
     };
   }
@@ -244,23 +245,32 @@ export async function inspectAndFetchExternalVideo(
     const durationData = await new Promise<{ durationSeconds: number; formatted: string }>((resolve) => {
       const v = document.createElement('video');
       v.preload = 'metadata';
-      v.src = meta.normalizedUrl;
-      const timeout = setTimeout(() => {
-        resolve({ durationSeconds: 2700, formatted: '45 دقيقة' });
-      }, 5000);
+      v.muted = true;
+      let settled = false;
 
-      v.onloadedmetadata = () => {
+      const finish = (secs: number) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
-        const secs = Math.round(v.duration);
+        cleanupVideoElement(v);
         resolve({
-          durationSeconds: isNaN(secs) || secs <= 0 ? 2700 : secs,
-          formatted: formatDurationArabic(isNaN(secs) || secs <= 0 ? 2700 : secs),
+          durationSeconds: secs,
+          formatted: secs > 0 ? formatDurationArabic(secs) : '',
         });
       };
-      v.onerror = () => {
-        clearTimeout(timeout);
-        resolve({ durationSeconds: 2700, formatted: '45 دقيقة' });
+
+      const timeout = setTimeout(() => {
+        finish(0);
+      }, 6000);
+
+      v.onloadedmetadata = () => {
+        const secs = Math.round(v.duration);
+        finish(!isNaN(secs) && isFinite(secs) && secs > 0 ? secs : 0);
       };
+      v.onerror = () => {
+        finish(0);
+      };
+      v.src = meta.normalizedUrl;
     });
 
     onProgress({
@@ -412,16 +422,25 @@ export async function inspectAndFetchExternalDocument(
     rawTotal: 100,
   });
 
-  // Attempt to read exact page count using window.pdfjsLib
-  if (detectedType === 'pdf' && typeof window !== 'undefined' && window.pdfjsLib) {
+  // Attempt to read exact page count using PDF.js
+  if (detectedType === 'pdf') {
     try {
-      const pdf = await window.pdfjsLib.getDocument(meta.normalizedUrl).promise;
-      if (pdf && pdf.numPages > 0) {
-        pageCount = pdf.numPages;
+      const loaded = await fetchDocumentAsBlob(meta.normalizedUrl);
+      try {
+        const pdf = await loadPdfFromBytes(loaded.bytes);
+        if (pdf && pdf.numPages > 0) {
+          pageCount = pdf.numPages;
+        }
+        try {
+          await pdf?.cleanup?.();
+        } catch {}
+      } finally {
+        try {
+          URL.revokeObjectURL(loaded.blobUrl);
+        } catch {}
       }
     } catch {
-      // If CORS prevents full PDF fetch, default to estimated count
-      pageCount = 15;
+      // Keep default fallback when CORS prevents client fetch
     }
   }
 

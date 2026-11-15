@@ -101,6 +101,10 @@ export interface LessonSectionItem {
   externalUrl?: string;
   textContent?: string;
   notes?: string;
+  durationSeconds?: number;
+  durationFormatted?: string;
+  durationHms?: string;
+  pageCount?: number;
   order?: number;
 }
 
